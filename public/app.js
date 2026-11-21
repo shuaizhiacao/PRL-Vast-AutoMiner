@@ -274,7 +274,7 @@ async function releaseOrder(kind, key) {
   if (!ok) return;
   try {
     const r = await api('/api/orders/release', { kind, key, confirm: true });
-    toast(r.adopted || r.listed ? '列表里已经有对应机器，没有释放' : '已停止占用。这不能证明没有创建或已经停费');
+    toast(r.adopted || r.listed ? '列表里已经有对应机器，没有释放' : r.already ? '这笔已经处理过，没有再次释放，也没有认领' : r.released ? '已停止占用。这不能证明没有创建或已经停费' : (r.reason || '没有释放'));
   } catch (e) { toast(e.message, true); }
   refresh();
 }

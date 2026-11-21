@@ -1000,8 +1000,8 @@ ok(snap.market.nockPerThDay > 0 && snap.account.nockPending === 0.0295, `面板�
   const counted = eH.budget(eH.instances());
   const listed = eH.instances().find(i => i.id === '9501');
   ok(listed && counted.spend > 0 && counted.spend < listed.dph + 0.3 + 0.05, '迟到列表出现后只计一次，不和未出现记录重计');
-  try { await eH.releasePending('late', { confirm: true }); } catch (e) { msg = e.message; }
-  ok(/没有这笔/.test(msg), '重复释放是无效请求');
+  const again = await eH.releasePending('late', { confirm: true });
+  ok(again.adopted === true && again.released === false && eH.st.managed['9501'], '已经认领后再操作不会释放，也不假装还没处理');
   try { await eH.releaseUnlisted('missing', { confirm: true }); } catch (e) { msg = e.message; }
   ok(/没有这笔/.test(msg) && eH.st.managed['9401'], '无效编号不会动其他记录');
   eH.vast.instances = async () => [];
@@ -1066,6 +1066,99 @@ ok(snap.market.nockPerThDay > 0 && snap.account.nockPending === 0.0295, `面板�
   };
   try { await eH2.rent({ id: 9701, machineId: 9701, gpuName: 'RTX 4070S', numGpus: 1, dph: 0.05, th: 122, geolocation: 'Texas, US' }, 'manual'); } catch {}
   ok(saw?.persisted === true && saw?.state === 'inflight' && eH2.st.pendingOrders['9701']?.state === 'unknown', '创建请求发出前订单已落盘；结果未知后仍保留，不会变成可再下单的空记录');
+}
+
+{
+  const eZ = new Engine();
+  eZ.log = () => {};
+  await eZ.refreshMarket(); await eZ.refreshWildrig();
+  const prevPrice = globalThis.__price;
+  globalThis.__price = 20;
+  await eZ.refreshMarket();
+  eZ.account.vastBalance = 50;
+  eZ.cfg.maxHourlySpend = 0.5;
+  eZ.cfg.maxInstances = 3;
+  eZ.cfg.minBalanceReserve = 0;
+  eZ.cfg.autoRent = false;
+  eZ.st.managed = {};
+  eZ.st.pendingOrders = {};
+  eZ.st.orderHistory = [];
+  eZ.rawInstances = [];
+  eZ.reservations = new Map();
+  eZ.vast.lastListTruncated = false;
+  eZ.vast.instances = async () => [];
+  eZ.vast.searchOffers = async (_f, _m, _n, extra) => [{
+    id: extra?.id, machine_id: 800 + (Number(extra?.id) % 50), gpu_name: 'RTX 4070S', num_gpus: 1,
+    dph_total: 0.4, min_bid: 0.29, storage_cost: 0.1, inet_up_cost: 0, inet_down_cost: 0,
+    search: { diskHour: 0.005 }, reliability2: 0.99, geolocation: 'Texas, US', inet_down: 800, cuda_max_good: 12.6,
+  }];
+  let releasePut;
+  const hung = new Promise(r => { releasePut = r; });
+  let puts = 0;
+  eZ.vast.rent = async () => { puts++; if (puts === 1) return hung; return { success: true, new_contract: 9800 + puts }; };
+  const first = eZ.rent({ id: 9801, machineId: 801, gpuName: 'RTX 4070S', numGpus: 1, dph: 0.05, th: 122, geolocation: 'Texas, US' }, 'manual');
+  for (let i = 0; i < 50 && !eZ.st.pendingOrders['9801']; i++) await new Promise(r => setTimeout(r, 10));
+  const saved = eZ.st.pendingOrders['9801'];
+  ok(saved?.state === 'inflight' && saved.dph > 0.25, `复核后的合计 $${saved?.dph} 已落盘，创建请求仍挂起`);
+  let blocked = '';
+  try { await eZ.releasePending('9801', { confirm: true }); } catch (e) { blocked = e.message; }
+  ok(/还在本次运行/.test(blocked) && eZ.st.pendingOrders['9801'], '在途创建不能被人工释放');
+  const mid = eZ.budget(eZ.instances());
+  ok(mid.spend > 0.25 && mid.spend < 0.4, '挂起期间按复核后的金额占额，不退回报价前的 $0.05');
+  const putsAtHang = puts;
+  try { await eZ.rent({ id: 9802, machineId: 802, gpuName: 'RTX 4070S', numGpus: 1, dph: 0.3, th: 122, geolocation: 'Texas, US' }, 'manual'); } catch {}
+  ok(puts === putsAtHang, '上限 $0.50 时，在途约 $0.30 挡住另一笔 $0.30');
+  const tok = eZ.st.pendingOrders['9801'].token;
+  eZ.rawInstances = [{ id: 9810, label: `prl-auto-RTX4070S tok=${tok} pool=pearlhash`, gpu_name: 'RTX 4070S', num_gpus: 1, machine_id: 801, actual_status: 'loading', start_date: Date.now() / 1000, inet_up_cost: 0, inet_down_cost: 0, storage_cost: 0 }];
+  await eZ.reconcilePending();
+  const during = eZ.budget(eZ.instances());
+  ok(eZ.st.managed['9810'] && !eZ.st.pendingOrders['9801'] && during.reservedCount === 0 && during.roomCount === 2, '列表先出现后，旧预留不再和实际重复占额');
+  releasePut({ success: true, new_contract: 9810 });
+  await first.catch(() => {});
+  eZ.st.managed = { '9707': { rentedAt: Date.now(), dph: 0.1, machineId: 707, gpuName: 'RTX 4070S', numGpus: 1, rentMode: 'interruptible', bid: 0.1 } };
+  eZ.rawInstances = [{ id: 9707, machine_id: 707, gpu_name: 'RTX 4070S', num_gpus: 1, actual_status: 'running' }];
+  eZ.vast.destroy = async () => ({ success: false, error: 'still_running' });
+  let dmsg = '';
+  try { await eZ.destroy('9707', '测试'); } catch (e) { dmsg = e.message; }
+  ok(/still_running/.test(dmsg) && eZ.st.managed['9707'], 'HTTP 200 且 success:false 不删账');
+  eZ.vast.destroy = async () => ({ weird: true });
+  try { await eZ.destroy('9707', '测试'); } catch (e) { dmsg = e.message; }
+  ok(/不明确/.test(dmsg) && eZ.st.managed['9707'], '看不懂的销毁回包保留账本');
+  eZ.vast.destroy = async () => ({ success: true });
+  await eZ.destroy('9707', '测试');
+  ok(!eZ.st.managed['9707'], '明确 success:true 才删除');
+  eZ.st.managed['9708'] = { rentedAt: Date.now(), dph: 0.1, machineId: 708, gpuName: 'RTX 4070S', numGpus: 1 };
+  eZ.vast.destroy = async () => { const err = new Error('HTTP 404：no such instance'); err.status = 404; throw err; };
+  await eZ.destroy('9708', '测试');
+  ok(!eZ.st.managed['9708'], '明确 404 是终态');
+  eZ.st.pendingOrders = { '78': { at: Date.now(), state: 'unknown', dph: 0.05, offerId: '78', token: 'k78', machineId: 78, gpuName: 'RTX 4070S', numGpus: 1, rentMode: 'interruptible', bid: 0.04 } };
+  let bad = '';
+  try { await eZ.releasePending(['78'], { confirm: true }); } catch (e) { bad = e.message; }
+  ok(/无效/.test(bad) && eZ.ownPending('78'), '数组编号不能释放对应字符串订单');
+  eZ.st.pendingOrders = {};
+  let proto = null;
+  try { proto = await eZ.releasePending('__proto__', { confirm: true }); } catch (e) { bad = e.message; }
+  ok(proto == null && /无效/.test(bad) && proto?.released !== true, '原型键不能被当成订单释放');
+  eZ.st.pendingOrders = { once: { at: Date.now(), state: 'unknown', dph: 0.05, offerId: 'once', token: 'once1', machineId: 11, gpuName: 'RTX 4070S', numGpus: 1, rentMode: 'interruptible', bid: 0.04 } };
+  eZ.st.managed = {};
+  eZ.vast.instances = async () => [];
+  const pair = await Promise.all([eZ.releasePending('once', { confirm: true }), eZ.releasePending('once', { confirm: true })]);
+  ok(pair.filter(x => x.released).length === 1 && !pair.some(x => x.adopted) && pair.some(x => x.already), '并发释放只成功一次，第二次不报认领');
+  eZ.rawInstances = [];
+  eZ.st.managed = {};
+  eZ.st.pendingOrders = {};
+  ok((eZ.st.orderHistory || []).some(h => h.token === 'once1') && !(eZ.budget(eZ.instances()).spend > 0), '释放历史不占预算');
+  eZ.rawInstances = [{ id: 9911, label: 'prl-auto-RTX4070S tok=once1 pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1, machine_id: 11, actual_status: 'running', dph_total: 1.5, inet_up_cost: 0, inet_down_cost: 0, storage_cost: 0 }];
+  const live = eZ.instances().find(i => i.id === '9911');
+  const again = eZ.budget(eZ.instances());
+  ok(eZ.st.managed['9911']?.rentMode === 'interruptible' && eZ.st.managed['9911']?.bid === 0.04 && live && live.dph < 0.2 && again.spend > 0 && again.spend < 0.2, '晚到的同一标签用记下的出价，不用 dph_total，且只占一次');
+  eZ.st.pendingOrders = { crash2: { at: Date.now(), state: 'inflight', dph: 0.3, offerId: 'crash2', token: 'c2', machineId: 2, gpuName: 'RTX 4070S', numGpus: 1, rentMode: 'interruptible', bid: 0.29 } };
+  eZ.st.managed = {};
+  eZ.save();
+  const eZ2 = new Engine();
+  eZ2.log = () => {};
+  ok(eZ2.st.pendingOrders.crash2?.state === 'unknown' && eZ2.st.pendingOrders.crash2.dph === 0.3, '崩溃后订单还在，金额仍是复核后的合计');
+  globalThis.__price = prevPrice;
 }
 
 console.log(`\n${pass} 通过，${fail} 失败`);
