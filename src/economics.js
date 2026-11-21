@@ -277,12 +277,56 @@ export function sustainedStats(samples, now, resetAt, windowMs, staleMs) {
   return { ok: true, hs, newestAgeMs: newestAge, stale: false };
 }
 
+// 已经租下的机器每小时要花多少。
+// vast 实例上的 dph_total 是按需总价，不是可中断出价，也不是租客的合计成本。
+// 本程序租的机器优先用下单时记下的出价（或按需算力价）加上当前仍有效的存储单价，
+// 再加上配置里的流量上限。存储单价变了会反映到新的合计里。
+// 可中断实例如果既没有有效出价、也没有下单时的合计，不能拿 dph_total 来冒充，也不能当成 0。
+export function managedRunningCost(inst, managed, cfg) {
+  const mode = managed?.rentMode;
+  const saved = finiteNum(managed?.dph);
+  const savedOk = saved != null && saved > 0;
+  const bid = finiteNum(managed?.bid);
+  const st = storageHourly(inst || {}, cfg?.disk);
+  const bw = bandwidthHourly(inst || {}, cfg?.bandwidthGbPerHour ?? 0);
+  if (!st.ok || !bw.ok) {
+    if (mode === 'interruptible') return { ok: false, dph: null, storageHr: null, why: (!st.ok ? st.why : bw.why) || '费用无效' };
+    if (savedOk) return { ok: true, dph: saved, storageHr: null, source: 'saved' };
+    const listed = finiteNum(inst?.dph_total);
+    if (listed != null && listed > 0) return { ok: true, dph: listed, storageHr: null, source: 'dph_total' };
+    return { ok: false, dph: null, storageHr: null, why: '费用无效' };
+  }
+  const storageHr = st.known ? st.hr : null;
+  const bandwidthHr = bw.known ? bw.hr : null;
+  if (mode === 'interruptible') {
+    if (bid != null && bid > 0 && storageHr != null && bandwidthHr != null) {
+      const dph = bid + storageHr + bandwidthHr;
+      if (dph > 0) return { ok: true, dph, storageHr, bandwidthHr, source: 'bid+storage+bandwidth' };
+    }
+    if (savedOk) return { ok: true, dph: saved, storageHr, bandwidthHr, source: 'saved' };
+    return { ok: false, dph: null, storageHr, why: '可中断实例没有有效的出价或下单总费用' };
+  }
+  const gpu = finiteNum(inst?.search?.gpuCostPerHour);
+  const base = finiteNum(inst?.dph_base);
+  const compute = gpu != null && gpu > 0 ? gpu : (base != null && base > 0 ? base : null);
+  if (compute != null && storageHr != null && bandwidthHr != null) {
+    const dph = compute + storageHr + bandwidthHr;
+    if (dph > 0) return { ok: true, dph, storageHr, bandwidthHr, source: 'compute+storage+bandwidth' };
+  }
+  if (savedOk) return { ok: true, dph: saved, storageHr, source: 'saved' };
+  const listed = finiteNum(inst?.dph_total);
+  if (listed != null && listed > 0) return { ok: true, dph: listed, storageHr, source: 'dph_total' };
+  return { ok: false, dph: null, storageHr: null, why: '没有有效的时租' };
+}
+
 // 抢占是可中断实例的正常生命周期，不是硬件故障。
+// 仍在 running / loading / created / scheduling 的机器不是抢占，哪怕状态文字里写了租用类型 "interruptible"。
 export function isPreempted(inst, managed) {
-  const msg = `${inst?.status_msg || ''} ${inst?.cur_state || ''} ${inst?.next_state || ''}`;
-  if (/outbid|preempt|bid too low|client bid|interrup/i.test(msg)) return true;
   const actual = String(inst?.actual_status || '');
   if (actual === 'running' || actual === 'loading' || actual === 'created' || actual === 'scheduling') return false;
+  const msg = `${inst?.status_msg || ''} ${inst?.cur_state || ''} ${inst?.next_state || ''}`;
+  // "interrupted" 是已经发生的抢占。不要用能命中 "interruptible" 的子串。
+  if (/outbid|preempt|bid too low|client bid|\binterrupted\b/i.test(msg)) return true;
   const stopped = inst?.intended_status === 'stopped' || /^(stopped|exited)$/i.test(actual);
   return !!(managed?.rentMode === 'interruptible' && stopped && actual);
 }

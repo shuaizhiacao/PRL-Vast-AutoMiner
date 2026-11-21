@@ -617,5 +617,71 @@ ok(snap.market.nockPerThDay > 0 && snap.account.nockPending === 0.0295, `面板�
   ok(eP.st.managed['5150'] && !eP.st.pendingOrders[String(offer.id)], '超时之后如果实例已经在列表里，就认领它，不再下第二单');
 }
 
+{
+  const Econ = await import(U('src/economics.js') + '?cost=1');
+  const runningMsg = { actual_status: 'running', intended_status: 'running', status_msg: 'interruptible' };
+  ok(!Econ.isPreempted(runningMsg, { rentMode: 'interruptible' }), '正在运行且状态里有 interruptible → 不是抢占');
+  ok(!Econ.isPreempted({ actual_status: 'loading', status_msg: 'type interruptible' }, { rentMode: 'interruptible' }), 'loading 中的可中断实例不是抢占');
+  ok(Econ.isPreempted({ actual_status: 'exited', intended_status: 'stopped', status_msg: 'outbid' }, { rentMode: 'interruptible' }), 'outbid 且已退出 → 是抢占');
+  ok(Econ.isPreempted({ actual_status: 'stopped', intended_status: 'stopped', status_msg: 'preempted' }, { rentMode: 'interruptible' }), 'preempted 且已停止 → 是抢占');
+  ok(Econ.isPreempted({ actual_status: 'exited', status_msg: 'instance interrupted' }, { rentMode: 'interruptible' }), 'interrupted 且已退出 → 是抢占');
+  ok(!Econ.isPreempted({ actual_status: 'stopped', intended_status: 'stopped', status_msg: 'interruptible' }, { rentMode: 'ondemand' }), '按需实例的状态文字里有 interruptible 不算抢占');
+
+  const eC = new Engine();
+  eC.log = () => {};
+  eC.updateConfig({ autoRent: false, maxHourlySpend: 2, maxInstances: 5, stopLossPct: -100, negativeExitMinutes: 60 });
+  await eC.refreshMarket();
+  const now = Date.now();
+  const disk = eC.cfg.disk;
+  const storage = 0.144 * disk / (30 * 24);
+  const bandwidth = (0.02 + 0.03) * eC.cfg.bandwidthGbPerHour;
+  const bid = 0.05;
+  const allIn = bid + storage + bandwidth;
+  eC.rawInstances = [{
+    id: 6101, label: 'prl-auto-RTX4070S pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1,
+    dph_total: 0.42, dph_base: 0.4, actual_status: 'running', intended_status: 'running', status_msg: 'interruptible',
+    start_date: now / 1000 - 7200, machine_id: 91, storage_cost: 0.144, inet_up_cost: 0.02, inet_down_cost: 0.03,
+  }];
+  eC.st.managed['6101'] = {
+    rentedAt: now - 80 * MIN, hashAt: now - 70 * MIN, gpuName: 'RTX 4070S', numGpus: 1, machineId: 91,
+    rentMode: 'interruptible', bid, dph: 0.2, pausedSince: now - 10 * MIN,
+  };
+  eC.everHashed.add('6101');
+  eC.samples.set(6101, [0, 1, 2, 3, 4, 5].map(k => ({ t: now - (6 - k) * MIN, hs: 130e12 })));
+  eC.workers.set('v6101', { hs: 130e12, gpus: [{ name: 'RTX 4070S', hs: 130e12 }] });
+  eC.workersOk = true;
+  const live = eC.instances().find(i => i.id === '6101');
+  const wrongRoi = (live.expectedHs * eC.usdHsHr - 0.42) / 0.42 * 100;
+  ok(live.phase !== 'preempted' && live.costKnown && Math.abs(live.dph - allIn) < 1e-9 && Math.abs(live.dph - 0.42) > 0.2, `运行中的合计时租用出价+存储+流量 $${live.dph?.toFixed(4)}，不用按需 dph_total $0.42`);
+  ok(Math.abs(live.expRoi - wrongRoi) > 1, '预期收益率按合计时租算，不按更高的按需价');
+  const bCost = eC.budget(eC.instances());
+  ok(Math.abs(bCost.spend - allIn) < 1e-9 && bCost.roomSpend > 0, `预算花费用合计时租 $${bCost.spend.toFixed(4)}，不是按需价`);
+  let killed = null;
+  eC.vast.destroy = async id => { killed = id; return { success: true }; };
+  await eC.autoDestroy(eC.instances());
+  ok(killed == null && !eC.st.blacklist[91] && eC.st.managed['6101'], '运行中且状态含 interruptible → 不销毁、不拉黑');
+
+  eC.rawInstances = [{
+    id: 6102, label: 'prl-auto-RTX4070S pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1,
+    dph_total: 0.55, actual_status: 'exited', intended_status: 'stopped', status_msg: 'preempted',
+    start_date: now / 1000 - 3600, machine_id: 92,
+  }];
+  eC.st.managed = { '6102': { rentedAt: now - 60 * MIN, gpuName: 'RTX 4070S', numGpus: 1, machineId: 92, rentMode: 'interruptible', bid: 0.04, dph: 0.05, hashAt: now - 40 * MIN, pausedSince: now - 5 * MIN } };
+  killed = null;
+  await eC.autoDestroy(eC.instances());
+  ok(killed === '6102' && !eC.st.blacklist[92], '已抢占的可中断实例会销毁，且不拉黑主机');
+
+  eC.rawInstances = [{
+    id: 6103, label: 'prl-auto-RTX4070S pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1,
+    dph_total: 0.8, actual_status: 'running', intended_status: 'running', status_msg: 'interruptible',
+    start_date: now / 1000 - 3600, machine_id: 93,
+  }];
+  eC.st.managed = { '6103': { rentedAt: now - 30 * MIN, gpuName: 'RTX 4070S', numGpus: 1, machineId: 93, rentMode: 'interruptible', bid: Number.NaN, dph: 'nope', hashAt: now - 20 * MIN } };
+  const missing = eC.instances().find(i => i.id === '6103');
+  const bMissing = eC.budget(eC.instances());
+  ok(missing.dph == null && missing.dph !== 0 && missing.costKnown === false && missing.roi == null, '可中断实例费用缺失时不是 0，也不改用 dph_total');
+  ok(bMissing.spend !== 0.8 && bMissing.costUnknown === true && bMissing.roomSpend === 0, '费用未知时预算不把它当成免费');
+}
+
 console.log(`\n${pass} 通过，${fail} 失败`);
 process.exit(fail ? 1 : 0);

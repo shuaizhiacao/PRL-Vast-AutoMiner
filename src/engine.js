@@ -7,7 +7,7 @@ import { POOLS, POOL_IDS, poolName, minerTarget, fetchKryptexInfo, fetchKryptexW
 import { loadConfig, saveConfig, loadState, saveState, appendLog, DEFAULT_CONFIG } from './store.js';
 import {
   quoteOffer, planBid, rankByHashPerDollar, viableModelKeys, modelProbePlan, hotDecision, resolveScanInterval,
-  profitFloorDecision, sustainedStats, isPreempted, finiteNum, rentModeOf, storageHourly,
+  profitFloorDecision, sustainedStats, isPreempted, finiteNum, rentModeOf, storageHourly, managedRunningCost,
 } from './economics.js';
 
 const MIN = 60_000;
@@ -272,8 +272,10 @@ export class Engine {
     const h = dt / 3_600_000;
     for (const x of list) {
       if (!(ACTIVE.has(x.status) || x.phase === 'booting')) continue;
+      const cost = finiteNum(x.dph);
+      if (!(cost > 0)) continue;
       const L = this.ledgerOf(x.pool);
-      L.spend += x.dph * h;
+      L.spend += cost * h;
       L.theo += (x.avgHs > 0 ? x.revenueHr : 0) * h;
       L.hours += x.avgHs > 0 ? h : 0;
     }
@@ -482,7 +484,13 @@ export class Engine {
       // 出过算力的机器（记录里有出算力时间）不再算「部署中」：程序重启后内存里的记录丢了也一样
       const everSeen = !!m?.hashAt || this.everHashed.has(id) || arr.some(s => s.hs > 0) || (w ? w.hs > 0 : false);
       const firstHashAt = arr.find(s => s.hs > 0 && s.t > resetAt)?.t ?? null;
-      const dph = Number(i.dph_total) || 0;
+      // 本程序租的机器：用下单时的出价/按需算力价 + 当前存储 + 流量上限。
+      // 可中断实例上的 dph_total 是按需总价，不能拿来当实际时租，缺数字时也不能当成 0。
+      const quote = m
+        ? managedRunningCost(i, m, this.cfg)
+        : (finiteNum(i.dph_total) > 0 ? { ok: true, dph: Number(i.dph_total), storageHr: storageHourly(i, this.cfg.disk).hr } : { ok: false, dph: null, storageHr: null });
+      const dph = quote.ok ? quote.dph : null;
+      const costKnown = !!quote.ok;
       const startedAt = (m?.rentedAt) || (i.start_date ? i.start_date * 1000 : now);
       const ageMin = (now - startedAt) / MIN;
       // 部署超时从「租下」或「最近一次重启」中较晚的那个开始算
@@ -490,8 +498,8 @@ export class Engine {
       const useHs = avgHs > 0 ? avgHs : 0;
       const revenueHr = useHs * usd;
       const expRevenueHr = expectedHs * usd;
-      const roi = dph > 0 && useHs > 0 ? (revenueHr - dph) / dph * 100 : null;
-      const expRoi = dph > 0 && expectedHs > 0 ? (expRevenueHr - dph) / dph * 100 : null;
+      const roi = costKnown && useHs > 0 ? (revenueHr - dph) / dph * 100 : null;
+      const expRoi = costKnown && expectedHs > 0 ? (expRevenueHr - dph) / dph * 100 : null;
       let phase;
       if (sw) phase = 'switching';
       else if (restarting) phase = 'restarting';
@@ -514,7 +522,7 @@ export class Engine {
         switching: sw ? { from: sw.from, to: sw.to, at: sw.at, auto: !!sw.auto, reason: sw.reason || '' } : null,
         failoverFrom: m?.failoverFrom || null, poolSince: m?.poolSince || null,
         series,
-        id, managed, label: i.label || '', gpuName: i.gpu_name, numGpus, dph,
+        id, managed, label: i.label || '', gpuName: i.gpu_name, numGpus, dph, costKnown,
         status: i.actual_status || 'unknown', statusMsg: (i.status_msg || '').slice(0, 160),
         geolocation: i.geolocation || '', machineId: i.machine_id, ip: i.public_ipaddr || '',
         gpuUtil: i.gpu_util ?? null, gpuTemp: i.gpu_temp ?? null,
@@ -523,7 +531,7 @@ export class Engine {
         belowSince: m?.belowSince || null, refSource: ref?.source || '未知型号',
         deploy: m ? { rentedAt: m.rentedAt, runningAt: m.runningAt || null, hashAt: m.hashAt || null, inetDown: m.inetDown ?? i.inet_down ?? null } : null,
         rentMode: m?.rentMode || null,
-        storageHr: storageHourly(i, this.cfg.disk).hr || 0,
+        storageHr: quote.storageHr ?? null,
         logHint: this.logHint(id),
       };
     });
@@ -1039,15 +1047,18 @@ export class Engine {
 
   budget(list) {
     const active = list.filter(x => ACTIVE.has(x.status) || x.phase === 'booting');
-    const spend = active.reduce((a, x) => a + x.dph, 0);
+    const hourly = x => { const n = finiteNum(x.dph); return n != null && n > 0 ? n : 0; };
+    const spend = active.reduce((a, x) => a + hourly(x), 0);
+    // 费用缺失的已租机器不能按 0 元放进预算，否则会当成免费再去租新的。
+    const costUnknown = active.some(x => x.managed && x.costKnown === false);
     // 停止/被抢占的实例不再占 GPU，但存储还在计费，占用每小时预算。
     const pausedStorage = list
       .filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted'))
-      .reduce((a, x) => a + (Number(x.storageHr) || 0), 0);
+      .reduce((a, x) => a + (finiteNum(x.storageHr) > 0 ? x.storageHr : 0), 0);
     return {
-      count: active.length, spend, pausedStorage,
+      count: active.length, spend, pausedStorage, costUnknown,
       roomCount: this.cfg.maxInstances - active.length,
-      roomSpend: this.cfg.maxHourlySpend - spend - pausedStorage,
+      roomSpend: costUnknown ? 0 : this.cfg.maxHourlySpend - spend - pausedStorage,
       roomBalance: (this.account.vastBalance ?? 0) - this.cfg.minBalanceReserve,
       spendCapByRunway: this.cfg.runwayGuard ? Math.max(0, ((this.account.vastBalance ?? 0) - this.cfg.minBalanceReserve) / this.cfg.minRunwayHours) : null, // null = 续航保护已关闭
     };
@@ -1632,7 +1643,7 @@ export class Engine {
   summary(list = this.instances()) {
     const active = list.filter(x => x.status === 'running' || x.phase === 'booting' || x.status === 'loading');
     const pausedStorage = list.filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted')).reduce((a, x) => a + (Number(x.storageHr) || 0), 0);
-    const spendHr = active.reduce((a, x) => a + x.dph, 0) + pausedStorage;
+    const spendHr = active.reduce((a, x) => a + (finiteNum(x.dph) > 0 ? x.dph : 0), 0) + pausedStorage;
     // 有实测算力用实测；部署中 / 未匹配矿工的机器用预期算力（面板上标注「含预估」）
     const estimated = active.filter(x => !(x.avgHs > 0) && (x.phase === 'booting' || x.phase === 'unmatched'));
     const revenueHr = active.reduce((a, x) => a + (x.avgHs > 0 ? x.revenueHr : estimated.includes(x) ? x.expRevenueHr : 0), 0);
