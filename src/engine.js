@@ -326,6 +326,8 @@ export class Engine {
     try {
       this.rawInstances = await this.vast.instances();
       this.instancesOk = true;
+      this.instanceListGen = (this.instanceListGen || 0) + 1;
+      this.instanceListFetchedAt = Date.now();
       if (this.vastFailSince && Date.now() - this.vastFailSince > 3 * MIN) this.log('info', `vast 连接已恢复（中断了 ${Math.round((Date.now() - this.vastFailSince) / MIN)} 分钟）`);
       this.vastFailSince = null;
       for (const i of this.rawInstances) {
@@ -945,7 +947,11 @@ export class Engine {
       }
       // 1) 部署失败：超时仍无算力（从租下或最近一次重启算起），只针对从没出过算力的机器
       if ((x.phase === 'booting' || x.phase === 'offline') && x.bootAgeMin > this.cfg.bootTimeoutMinutes) {
-        await this.destroy(x.id, `部署超时 ${this.cfg.bootTimeoutMinutes} 分钟仍无算力（${x.statusMsg || x.status}）`, 24 * 60);
+        const churn = m.rentMode === 'interruptible';
+        const why = churn
+          ? `部署超时 ${this.cfg.bootTimeoutMinutes} 分钟仍无算力（可中断实例，不拉黑主机；${x.statusMsg || x.status}）`
+          : `部署超时 ${this.cfg.bootTimeoutMinutes} 分钟仍无算力（${x.statusMsg || x.status}）`;
+        await this.destroy(x.id, why, churn ? 0 : 24 * 60);
         continue;
       }
       // 2) 掉线：之前有算力，最近 10 分钟一直为 0（重启后的样本才算）
@@ -1000,8 +1006,6 @@ export class Engine {
       negExitMin: this.cfg.negativeExitMinutes,
       samplesOk: stats.ok,
       wasBelow: !!m.belowSince,
-      unknownForMin: m.unknownCostSince ? (now - m.unknownCostSince) / MIN : 0,
-      unknownExitMin: this.cfg.unknownCostMinutes,
     });
   }
 
@@ -1074,26 +1078,76 @@ export class Engine {
       if (ignoreOffer != null && String(k) === String(ignoreOffer)) continue;
       if (!(finiteNum(p?.dph) > 0)) return true;
     }
+    for (const [k, d] of (this.reservations || new Map()).entries()) {
+      if (ignoreOffer != null && String(k) === String(ignoreOffer)) continue;
+      if (this.st?.pendingOrders?.[k]) continue;
+      if (!(finiteNum(d) > 0)) return true;
+    }
     return false;
+  }
+
+  // 已经回包、但实例列表还没出现的机器。只看列表会把这笔费用漏成 0。
+  committedUnlisted(list, ignoreOffer = null) {
+    const ids = new Set((list || []).map(x => String(x.id)));
+    let spend = 0, slots = 0, unknown = 0;
+    for (const [id, m] of Object.entries(this.st?.managed || {})) {
+      if (ids.has(String(id))) continue;
+      if (ignoreOffer != null && String(m?.offerId) === String(ignoreOffer)) continue;
+      slots++;
+      const d = finiteNum(m?.dph);
+      if (d > 0) spend += d;
+      else unknown++;
+    }
+    return { spend, slots, unknown };
+  }
+
+  heldSlots(ignoreOffer = null) {
+    const keys = new Set();
+    for (const k of Object.keys(this.st?.pendingOrders || {})) {
+      if (ignoreOffer != null && String(k) === String(ignoreOffer)) continue;
+      keys.add(String(k));
+    }
+    for (const k of (this.reservations || new Map()).keys()) {
+      if (ignoreOffer != null && String(k) === String(ignoreOffer)) continue;
+      keys.add(String(k));
+    }
+    return keys.size;
   }
 
   budget(list, { ignoreOffer = null } = {}) {
     const active = list.filter(x => ACTIVE.has(x.status) || x.phase === 'booting');
     const hourly = x => { const n = finiteNum(x.dph); return n != null && n > 0 ? n : 0; };
-    const spend = active.reduce((a, x) => a + hourly(x), 0) + this.reservedSpend(ignoreOffer);
+    const extra = this.committedUnlisted(list, ignoreOffer);
+    const spend = active.reduce((a, x) => a + hourly(x), 0) + this.reservedSpend(ignoreOffer) + extra.spend;
     // 费用缺失的已租机器，或结果未知的未完成下单，不能按 0 元放进预算。
-    const costUnknown = active.some(x => x.managed && x.costKnown === false) || this.pendingCostUnknown(ignoreOffer);
+    const costUnknown = active.some(x => x.managed && x.costKnown === false) || extra.unknown > 0 || this.pendingCostUnknown(ignoreOffer);
     // 停止/被抢占的实例不再占 GPU，但存储还在计费，占用每小时预算。
     const pausedStorage = list
       .filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted'))
       .reduce((a, x) => a + (finiteNum(x.storageHr) > 0 ? x.storageHr : 0), 0);
+    const slots = active.length + extra.slots + this.heldSlots(ignoreOffer);
     return {
-      count: active.length, spend, pausedStorage, costUnknown,
-      roomCount: this.cfg.maxInstances - active.length,
+      count: active.length + extra.slots, spend, pausedStorage, costUnknown,
+      roomCount: Math.max(0, this.cfg.maxInstances - slots),
       roomSpend: costUnknown ? 0 : this.cfg.maxHourlySpend - spend - pausedStorage,
       roomBalance: (this.account.vastBalance ?? 0) - this.cfg.minBalanceReserve,
       spendCapByRunway: this.cfg.runwayGuard ? Math.max(0, ((this.account.vastBalance ?? 0) - this.cfg.minBalanceReserve) / this.cfg.minRunwayHours) : null, // null = 续航保护已关闭
     };
+  }
+
+  // 下单前的实时额度。调用方传入的 budgetHr 只能把上限再压低，不能比这里更大。
+  orderRoom(ignoreOffer, needHr = null) {
+    const b = this.budget(this.instances(), { ignoreOffer });
+    if (b.roomCount <= 0) return { ok: false, why: '已达同时租用台数上限', room: 0, b };
+    if (b.costUnknown) return { ok: false, why: '已有费用未知的机器或未确认订单，停止新开', room: 0, b };
+    const room = Math.min(
+      b.roomSpend > 0 ? b.roomSpend : 0,
+      b.spendCapByRunway == null ? 1e9 : Math.max(0, b.spendCapByRunway - b.spend),
+      Math.max(0, b.roomBalance),
+    );
+    if (!(room > 0)) return { ok: false, why: '超过每小时预算、余额保留或续航上限', room: 0, b };
+    if (needHr != null && needHr - room > 1e-9) return { ok: false, why: '超过每小时预算、余额保留或续航上限', room, b };
+    return { ok: true, room, b };
   }
 
   async autoRent(list) {
@@ -1151,8 +1205,14 @@ export class Engine {
       throw err;
     }
     this.inflightRent.add(offerKey);
-    if (finiteNum(offer.dph) > 0) this.reservations.set(offerKey, offer.dph);
+    this.reservations.set(offerKey, finiteNum(offer.dph) > 0 ? offer.dph : 0);
     try {
+    const early = this.orderRoom(offerKey, finiteNum(offer.dph));
+    if (!early.ok) {
+      const err = new Error(early.why);
+      err.skip = true;
+      throw err;
+    }
     await this.reconcilePending();
     if (this.st.managed && Object.values(this.st.managed).some(m => String(m.offerId) === offerKey && Date.now() - m.rentedAt < 30 * MIN)) {
       const err = new Error('这台报价刚刚已经租到，不会再下一单');
@@ -1180,10 +1240,14 @@ export class Engine {
       err.stop = !!fresh.stop;
       throw err;
     }
-    const b = this.budget(this.instances(), { ignoreOffer: offerKey });
-    const room = Math.min(b.roomSpend > 0 ? b.roomSpend : 0, b.spendCapByRunway == null ? 1e9 : Math.max(0, b.spendCapByRunway - b.spend), Math.max(0, b.roomBalance));
-    // 手动和自动都用剩余预算。用户仍可点选一台，只要这台的合计时租落在剩余额度里。
-    const cap = budgetHr != null ? budgetHr : room;
+    const live = this.orderRoom(offerKey, null);
+    if (!live.ok) {
+      const err = new Error(live.why);
+      err.skip = true;
+      throw err;
+    }
+    // 调用方带来的预算（自动租用循环里的旧数字）只能收紧，不能盖过刚算出来的剩余额度。
+    const cap = budgetHr == null ? live.room : Math.min(Number(budgetHr), live.room);
     const priced = this.priceForOrder(fresh.quote, cap);
     if (!priced.ok) {
       offer.used = true;
@@ -1355,29 +1419,17 @@ export class Engine {
     }) || null;
   }
 
-  // 未确认的下单一直留着。只靠实例列表对账，不再为了找它去搜市场。
-  // 连续两次、且间隔至少 1 分钟的成功列表都没有这台机器，才认为上次没创建成功。
+  // 未确认的下单一直留着，直到实例列表里出现对应机器。只对照已取回的列表，不为对账去搜市场。
+  // 同一份缓存多看几次，或再取回几份空列表，都不能证明上次没有创建，所以不会自动解锁。
   async reconcilePending() {
     const pend = this.st.pendingOrders || {};
-    const now = Date.now();
     let changed = false;
     for (const [offerId, p] of Object.entries(pend)) {
       const inst = this.findPendingInstance(p);
-      if (inst) {
-        this.rememberRent(inst.id, p);
-        delete pend[offerId];
-        changed = true;
-        continue;
-      }
-      if (!this.instancesOk || now - (p?.at || now) < 3 * MIN) continue;
-      if (p.lastMissAt && now - p.lastMissAt < MIN) continue;
-      p.listMisses = (p.listMisses || 0) + 1;
-      p.lastMissAt = now;
+      if (!inst) continue;
+      this.rememberRent(inst.id, p);
+      delete pend[offerId];
       changed = true;
-      if (p.listMisses >= 2) {
-        delete pend[offerId];
-        this.log('warn', `报价 ${offerId} 连续两次实例列表都没有对应机器，解除下单锁定`);
-      }
     }
     if (changed) this.save();
   }
@@ -1638,7 +1690,7 @@ export class Engine {
     num('scanMaxProbes', 1, 12); num('hotScanIntervalSec', 30, 60); num('hotScanTtlSec', 60, 600); num('hotMaxScans', 1, 8); num('hotCooldownSec', 60, 7200);
     num('revenueHotPct', 0.5, 50); num('bidUpliftPct', 0, 8); num('bandwidthGbPerHour', 0, 2);
     num('hashWarmupMinutes', 1, 30); num('negativeExitMinutes', 1, 60); num('staleHashMinutes', 1, 30);
-    num('unknownCostMinutes', 1, 120); num('pausedDestroyMinutes', 1, 120);
+    num('pausedDestroyMinutes', 1, 120);
     num('failoverMinutes', 2, 60);
     if (patch.rentMode === 'interruptible' || patch.rentMode === 'ondemand') next.rentMode = patch.rentMode;
     else if (patch.rentMode != null && patch.rentMode !== '') throw new Error('租用方式只能是 interruptible（可中断）或 ondemand（按需）');
@@ -1713,10 +1765,12 @@ export class Engine {
   summary(list = this.instances()) {
     const active = list.filter(x => x.status === 'running' || x.phase === 'booting' || x.status === 'loading');
     const pausedStorage = list.filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted')).reduce((a, x) => a + (Number(x.storageHr) || 0), 0);
+    const extra = this.committedUnlisted(list);
     const unknown = active.filter(x => x.managed && x.costKnown === false);
-    const knownSpend = active.reduce((a, x) => a + (finiteNum(x.dph) > 0 ? x.dph : 0), 0) + pausedStorage;
+    const knownSpend = active.reduce((a, x) => a + (finiteNum(x.dph) > 0 ? x.dph : 0), 0) + pausedStorage + extra.spend;
     // 有未知费用时不把缺的当成 0，否则综合收益率会偏高。
-    const costState = unknown.length === 0 ? 'known' : (knownSpend > 0 ? 'partial' : 'unknown');
+    const unknownCount = unknown.length + extra.unknown;
+    const costState = unknownCount === 0 ? 'known' : (knownSpend > 0 ? 'partial' : 'unknown');
     const spendHr = costState === 'known' ? knownSpend : null;
     // 有实测算力用实测；部署中 / 未匹配矿工的机器用预期算力（面板上标注「含预估」）
     const estimated = active.filter(x => !(x.avgHs > 0) && (x.phase === 'booting' || x.phase === 'unmatched'));
@@ -1725,10 +1779,10 @@ export class Engine {
     const bal = this.account.vastBalance;
     const profitHr = spendHr == null ? null : revenueHr - spendHr;
     return {
-      count: active.length, mining: active.filter(x => x.phase === 'mining' || x.phase === 'loss').length,
+      count: active.length + extra.slots, mining: active.filter(x => x.phase === 'mining' || x.phase === 'loss').length,
       abnormal: list.filter(x => ['low', 'gpu'].includes(x.health) || ['nohash', 'offline'].includes(x.phase)).length,
       estimatedCount: estimated.length,
-      spendHr, knownSpendHr: knownSpend, unknownCostCount: unknown.length, costState,
+      spendHr, knownSpendHr: knownSpend, unknownCostCount: unknownCount, costState,
       revenueHr, profitHr,
       roi: spendHr > 0 && revenueHr > 0 ? (revenueHr - spendHr) / spendHr * 100 : null,
       totalHs: hs,
@@ -1752,6 +1806,8 @@ export class Engine {
     return POOL_IDS.map(p => {
       const rigs = list.filter(x => x.pool === p && (ACTIVE.has(x.status) || x.phase === 'booting'));
       const sum = f => rigs.reduce((a, x) => a + (f(x) || 0), 0);
+      const spendKnown = rigs.every(x => !(x.managed && x.costKnown === false));
+      const spendHr = spendKnown ? rigs.reduce((a, x) => a + (finiteNum(x.dph) > 0 ? x.dph : 0), 0) : null;
       const isKx = p === 'kryptex';
       return {
         id: p, name: poolName(p), fee: this.poolFee(p), minerFee: POOLS[p].minerFee || 0, miner: POOLS[p].miner, nock: POOLS[p].nock, perGpu: POOLS[p].perGpu, site: POOLS[p].site,
@@ -1759,7 +1815,7 @@ export class Engine {
         apiOk: this.poolConfigured(p) ? this.poolDataOk(p) : null,
         apiError: isKx ? this.kx.error : (this.workersOk ? null : this.market.error),
         poolHs: isKx ? this.kx.info?.poolHs ?? null : this.market.poolHs,
-        rigs: rigs.length, hs: sum(x => x.avgHs), spendHr: sum(x => x.dph), revenueHr: sum(x => x.avgHs > 0 ? x.revenueHr : 0),
+        rigs: rigs.length, hs: sum(x => x.avgHs), spendHr, revenueHr: sum(x => x.avgHs > 0 ? x.revenueHr : 0),
         usdPerThDay: this.usdHsHrFor(p) * 1e12 * 24,
         pending: isKx ? (this.kx.earned ? { prl: this.kx.earned.balance, paid: this.kx.earned.paid } : null)
           : { prl: this.account.prlPending, nock: this.account.nockPending },

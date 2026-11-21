@@ -37,7 +37,7 @@ export const DEFAULT_CONFIG = {
   hashWarmupMinutes: 4,     // 刚出算力的短预热，避免爬坡噪声触发利润底线
   negativeExitMinutes: 5,   // 保守满算力仍然亏钱时，不必等满底线计时
   staleHashMinutes: 3,      // 算力样本比这更旧就不当成当前算力
-  unknownCostMinutes: 15,   // 跑着但费用数字无效，超过这个时间退出
+  // 费用未知不会自动退租（没有 unknownCostMinutes 这种计时）。预算会停止新租，面板显示未知。
   pausedDestroyMinutes: 3,  // 已停止/被抢占的实例仍可能计存储费，超时销毁，不拉黑主机
   hashLowPct: 80,           // 实测算力低于预期的这个百分比就标为异常
   minReliability: 0.95,
@@ -98,6 +98,8 @@ export function loadConfig() {
     cfg.configVersion = CONFIG_VERSION;
     try { writeJson(cfgFile, cfg); } catch {}
   }
+  // 旧配置里的 unknownCostMinutes 不再驱动退租。费用未知只停止新开，不自动销毁。
+  delete cfg.unknownCostMinutes;
   return cfg;
 }
 export function saveConfig(c) { writeJson(cfgFile, c); }

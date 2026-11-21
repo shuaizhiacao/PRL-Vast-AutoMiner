@@ -170,7 +170,7 @@ function render() {
       ${spark(H.map(h => h.usdPerThDay), '#a88bff')}</div>
     <div class="stat-card accent-amber"><div class="stat-top"><span>vast 余额</span><i>${esc(a.vastEmail || '')}</i></div>
       <strong>${usd(a.vastBalance)}</strong>
-      <div class="stat-foot">${s.runwayHours != null ? '按当前花费可跑 <b>' + dur(s.runwayHours * 60) + '</b>' : '当前没有计费中的机器'}</div></div>`;
+      <div class="stat-foot">${s.runwayHours != null ? '按当前花费可跑 <b>' + dur(s.runwayHours * 60) + '</b>' : (s.costState && s.costState !== 'known' && (s.count > 0 || s.unknownCostCount > 0) ? '费用未确认，无法估算还能跑多久' : '当前没有计费中的机器')}</div></div>`;
 
   $('#strip').innerHTML = `
     <div><span>在租机器</span><b>${s.count}<span class="dim" style="display:inline;font-size:12px"> / ${c.maxInstances}</span></b><small>挖矿中 ${s.mining}${s.abnormal ? ` · <span class="down">异常 ${s.abnormal}</span>` : ''}</small></div>

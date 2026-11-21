@@ -109,15 +109,17 @@ export function quoteOffer(raw, cfg, { revenuePerHsHour, hashrateHs, mode } = {}
   let compute = gpu != null && gpu > 0 ? gpu : (base != null && base > 0 ? base : null);
   if (compute != null && !st.known) return { ok: false, why: '按需报价有算力价但没有存储费用' };
   if (compute == null) {
+    // dph_total 不含按流量计的带宽。带宽已知时加在合计上；未知已在上面拒绝。
     const total = finiteNum(raw?.dph_total);
     if (!(total > 0)) return { ok: false, why: '缺少有效的按需时租 dph_total' };
-    const roi = (revenueHr - total) / total * 100;
+    const dph = total + bw.hr;
+    const roi = (revenueHr - dph) / dph * 100;
     return {
       ok: true, rentable: roi + 1e-6 >= target, why: '', rentMode, legacyTotal: true,
-      revenueHr, computeHr: null, storageHr: 0, bandwidthHr: 0, bandwidthKnown: false,
-      dph: total, minBid: finiteNum(raw?.min_bid), bid: null, maxBid: null,
-      roi, th: hs / 1e12, thPerDollar: (hs / 1e12) / total,
-      thPer01: (hs / 1e12) / (total / 0.1),
+      revenueHr, computeHr: null, storageHr: 0, bandwidthHr: bw.hr, bandwidthKnown: true,
+      dph, minBid: finiteNum(raw?.min_bid), bid: null, maxBid: null,
+      roi, th: hs / 1e12, thPerDollar: (hs / 1e12) / dph,
+      thPer01: (hs / 1e12) / (dph / 0.1),
     };
   }
   const dph = compute + st.hr + bw.hr;
