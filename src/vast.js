@@ -111,6 +111,12 @@ export class Vast {
 
 export function searchBody(f, names, extra = {}) {
   const limit = Math.max(1, Math.min(200, extra.limit || f.scanRows || 20));
+  const type = extra.type || vastSearchType(rentModeOf(f));
+  const cap = Math.max(0.01, f.maxHourlySpend);
+  // 可中断搜索按 min_bid（美元/小时）封顶和排序。dph_total 是按需总价，用它过滤会丢掉出价其实很便宜的机器。
+  const priceFilter = type === 'bid'
+    ? { min_bid: { lte: cap }, order: extra.order || [['min_bid', 'asc']] }
+    : { dph_total: { lte: cap }, order: extra.order || [['dph_total', 'asc']] };
   const q = {
     verified: { eq: true },
     external: { eq: false },
@@ -118,11 +124,10 @@ export function searchBody(f, names, extra = {}) {
     rented: { eq: false },
     reliability: { gte: f.minReliability },
     num_gpus: { gte: 1, lte: f.maxGpusPerMachine },
-    dph_total: { lte: Math.max(0.01, f.maxHourlySpend) }, // 单机时租不可能超过总预算
+    ...priceFilter,
     cuda_max_good: { gte: f.minCuda },
     inet_down: { gte: f.minInetDown },
-    order: extra.order || [['dph_total', 'asc']],
-    type: extra.type || vastSearchType(rentModeOf(f)),
+    type,
     limit,
     allocated_storage: f.disk,
     ...(names?.length ? { gpu_name: { in: names.slice(0, 64) } } : {}),

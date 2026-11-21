@@ -175,10 +175,10 @@ function render() {
   $('#strip').innerHTML = `
     <div><span>在租机器</span><b>${s.count}<span class="dim" style="display:inline;font-size:12px"> / ${c.maxInstances}</span></b><small>挖矿中 ${s.mining}${s.abnormal ? ` · <span class="down">异常 ${s.abnormal}</span>` : ''}</small></div>
     <div><span>总算力 · 10 分钟</span><b>${hs(s.totalHs)}</b><small>${num(s.prlPerDay, 1)} PRL / 天</small></div>
-    <div><span>每小时成本</span><b>${usd(s.spendHr, 3)}</b><small>${S.budget.spendCapByRunway != null && S.budget.spendCapByRunway < c.maxHourlySpend ? `续航上限 ${usd(S.budget.spendCapByRunway, 2)}` : `上限 ${usd(c.maxHourlySpend, 2)}${c.runwayGuard ? '' : ' · 续航保护关'}`}</small></div>
+    <div><span>每小时成本</span><b>${s.costState === 'known' ? usd(s.spendHr, 3) : '费用未知'}</b><small>${s.unknownCostCount ? `${s.unknownCostCount} 台未确认，已停止新租` : (S.budget.spendCapByRunway != null && S.budget.spendCapByRunway < c.maxHourlySpend ? `续航上限 ${usd(S.budget.spendCapByRunway, 2)}` : `上限 ${usd(c.maxHourlySpend, 2)}${c.runwayGuard ? '' : ' · 续航保护关'}`)}</small></div>
     <div><span>每小时收益</span><b>${usd(s.revenueHr, 3)}</b><small>${s.estimatedCount ? `含 ${s.estimatedCount} 台预估` : '全部实测'}</small></div>
-    <div class="tm-roi"><span>综合收益率</span><b class="${clsRoi(s.roi)}">${pct(s.roi)}</b><small>目标 ${c.targetProfitPct}% · 底线 ${c.stopLossPct}%</small></div>
-    <div><span>每日净利</span><b class="${s.profitHr >= 0 ? 'up' : 'down'}">${usd(s.profitHr * 24)}</b><small>${usd(s.profitHr, 3)} / 小时</small></div>
+    <div class="tm-roi"><span>综合收益率</span><b class="${s.costState === 'known' ? clsRoi(s.roi) : ''}">${s.costState === 'known' ? pct(s.roi) : '未知'}</b><small>目标 ${c.targetProfitPct}% · 底线 ${c.stopLossPct}%</small></div>
+    <div><span>每日净利</span><b class="${s.profitHr == null ? '' : s.profitHr >= 0 ? 'up' : 'down'}">${s.profitHr == null ? '未知' : usd(s.profitHr * 24)}</b><small>${s.profitHr == null ? '有机器费用未确认' : usd(s.profitHr, 3) + ' / 小时'}</small></div>
     ${(() => { const kx = (S.pools || []).find(p => p.id === 'kryptex' && p.configured); const kb = kx?.pending?.prl ?? 0;
       return `<div><span>矿池待结算</span><b>${num((a.prlPending || 0) + kb, 3)}<span class="dim" style="display:inline;font-size:11px"> PRL</span></b><small>${kx ? `PH ${num(a.prlPending, 2)} · KX ${num(kb, 2)}` : `${num(a.nockPending, 3)} NOCK`}</small></div>`; })()}`;
 

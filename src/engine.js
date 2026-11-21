@@ -340,6 +340,7 @@ export class Engine {
           delete this.st.managed[id]; this.save();
         }
       }
+      await this.reconcilePending();
     } catch (e) {
       this.instancesOk = false;
       this.vastFailSince ||= Date.now();
@@ -932,7 +933,14 @@ export class Engine {
       if (x.phase === 'offline') { if (!m.offlineSince) { m.offlineSince = now; this.save(); } }
       else if (m.offlineSince) { delete m.offlineSince; this.save(); }
       if (x.phase === 'offline' && (m.hashAt || this.everHashed.has(x.id))) {
-        if (now - m.offlineSince >= 10 * MIN) await this.destroy(x.id, `机器离线超过 10 分钟（vast 状态 ${x.status}${x.statusMsg ? '：' + x.statusMsg : ''}）`, 6 * 60);
+        if (now - m.offlineSince >= 10 * MIN) {
+          // 可中断实例被报成 offline 常常是抢占，不是主机硬件故障，不拉黑。
+          const churn = m.rentMode === 'interruptible';
+          const why = churn
+            ? `可中断实例被报告离线超过 10 分钟（可能是抢占，不拉黑主机；vast 状态 ${x.status}${x.statusMsg ? '：' + x.statusMsg : ''}）`
+            : `机器离线超过 10 分钟（vast 状态 ${x.status}${x.statusMsg ? '：' + x.statusMsg : ''}）`;
+          await this.destroy(x.id, why, churn ? 0 : 6 * 60);
+        }
         continue;
       }
       // 1) 部署失败：超时仍无算力（从租下或最近一次重启算起），只针对从没出过算力的机器
@@ -1045,12 +1053,36 @@ export class Engine {
     return why;
   }
 
-  budget(list) {
+  reservedSpend(ignoreOffer = null) {
+    let n = 0;
+    const pend = this.st?.pendingOrders || {};
+    for (const [k, p] of Object.entries(pend)) {
+      if (ignoreOffer != null && String(k) === String(ignoreOffer)) continue;
+      const d = finiteNum(p?.dph);
+      if (d > 0) n += d;
+    }
+    for (const [k, d] of (this.reservations || new Map()).entries()) {
+      if (ignoreOffer != null && String(k) === String(ignoreOffer)) continue;
+      if (pend[k]) continue;
+      if (finiteNum(d) > 0) n += d;
+    }
+    return n;
+  }
+
+  pendingCostUnknown(ignoreOffer = null) {
+    for (const [k, p] of Object.entries(this.st?.pendingOrders || {})) {
+      if (ignoreOffer != null && String(k) === String(ignoreOffer)) continue;
+      if (!(finiteNum(p?.dph) > 0)) return true;
+    }
+    return false;
+  }
+
+  budget(list, { ignoreOffer = null } = {}) {
     const active = list.filter(x => ACTIVE.has(x.status) || x.phase === 'booting');
     const hourly = x => { const n = finiteNum(x.dph); return n != null && n > 0 ? n : 0; };
-    const spend = active.reduce((a, x) => a + hourly(x), 0);
-    // 费用缺失的已租机器不能按 0 元放进预算，否则会当成免费再去租新的。
-    const costUnknown = active.some(x => x.managed && x.costKnown === false);
+    const spend = active.reduce((a, x) => a + hourly(x), 0) + this.reservedSpend(ignoreOffer);
+    // 费用缺失的已租机器，或结果未知的未完成下单，不能按 0 元放进预算。
+    const costUnknown = active.some(x => x.managed && x.costKnown === false) || this.pendingCostUnknown(ignoreOffer);
     // 停止/被抢占的实例不再占 GPU，但存储还在计费，占用每小时预算。
     const pausedStorage = list
       .filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted'))
@@ -1111,15 +1143,25 @@ export class Engine {
     if (why.length) throw new Error(why.join('、'));
     const offerKey = String(offer.id);
     this.inflightRent ||= new Set();
+    this.reservations ||= new Map();
     this.st.pendingOrders ||= {};
+    if (this.inflightRent.has(offerKey)) {
+      const err = new Error('这笔报价正在提交，不会重复下单');
+      err.unknown = true;
+      throw err;
+    }
+    this.inflightRent.add(offerKey);
+    if (finiteNum(offer.dph) > 0) this.reservations.set(offerKey, offer.dph);
+    try {
     await this.reconcilePending();
     if (this.st.managed && Object.values(this.st.managed).some(m => String(m.offerId) === offerKey && Date.now() - m.rentedAt < 30 * MIN)) {
       const err = new Error('这台报价刚刚已经租到，不会再下一单');
       err.skip = true;
       throw err;
     }
-    if (this.inflightRent.has(offerKey) || (this.st.pendingOrders[offerKey] && Date.now() - this.st.pendingOrders[offerKey].at < 10 * MIN)) {
-      const err = new Error('这笔报价已有未确认的下单，10 分钟内不会重复提交');
+    const blocked = Object.entries(this.st.pendingOrders).find(([k, p]) => k === offerKey || String(p?.offerId) === offerKey || (offer.machineId != null && String(p?.machineId) === String(offer.machineId)));
+    if (blocked) {
+      const err = new Error('这笔报价或这台机器已有未确认的下单，在确认上次没有创建之前不会再提交');
       err.unknown = true;
       throw err;
     }
@@ -1138,10 +1180,10 @@ export class Engine {
       err.stop = !!fresh.stop;
       throw err;
     }
-    const b = this.budget(this.instances());
+    const b = this.budget(this.instances(), { ignoreOffer: offerKey });
     const room = Math.min(b.roomSpend > 0 ? b.roomSpend : 0, b.spendCapByRunway == null ? 1e9 : Math.max(0, b.spendCapByRunway - b.spend), Math.max(0, b.roomBalance));
-    // 自动租用用剩余预算。手动租用仍不能超过「每小时最多花费」这一台的上限，但不受已经租满的剩余额度挡住（要先观察一台）。
-    const cap = budgetHr != null ? budgetHr : (by === 'manual' ? Math.max(room, this.cfg.maxHourlySpend) : room);
+    // 手动和自动都用剩余预算。用户仍可点选一台，只要这台的合计时租落在剩余额度里。
+    const cap = budgetHr != null ? budgetHr : room;
     const priced = this.priceForOrder(fresh.quote, cap);
     if (!priced.ok) {
       offer.used = true;
@@ -1229,7 +1271,7 @@ export class Engine {
           this.log('warn', `下单请求没有正常返回，但实例 ${id} 已经在账户里，按已租处理，不再重下`);
           return id;
         }
-        this.log('error', `${tag}租用 ${offer.gpuName}（offer ${offer.id}）结果未知：${e.message}。10 分钟内不会对这笔报价再下单`);
+        this.log('error', `${tag}租用 ${offer.gpuName}（offer ${offer.id}）结果未知：${e.message}。在实例列表确认上次没有创建之前，不会再下单`);
         const err = new Error(`下单结果未知：${e.message}`);
         err.unknown = true;
         throw err;
@@ -1241,6 +1283,12 @@ export class Engine {
       throw e;
     } finally {
       this.inflightRent.delete(offerKey);
+      this.reservations?.delete(offerKey);
+    }
+    } catch (e) {
+      this.inflightRent.delete(offerKey);
+      this.reservations?.delete(offerKey);
+      throw e;
     }
   }
 
@@ -1292,12 +1340,26 @@ export class Engine {
   }
 
   findPendingInstance(pending) {
-    if (!pending?.token) return null;
-    return this.rawInstances.find(i => String(i.label || '').includes(`tok=${pending.token}`)) || null;
+    if (!pending) return null;
+    const rows = this.rawInstances || [];
+    if (pending.token) {
+      const byTok = rows.find(i => String(i.label || '').includes(`tok=${pending.token}`));
+      if (byTok) return byTok;
+    }
+    if (pending.machineId == null) return null;
+    return rows.find(i => {
+      if (String(i.machine_id) !== String(pending.machineId)) return false;
+      if (!String(i.label || '').startsWith(LABEL)) return false;
+      const started = (i.start_date || 0) * 1000;
+      return started >= (pending.at || 0) - 120_000;
+    }) || null;
   }
 
+  // 未确认的下单一直留着。只靠实例列表对账，不再为了找它去搜市场。
+  // 连续两次、且间隔至少 1 分钟的成功列表都没有这台机器，才认为上次没创建成功。
   async reconcilePending() {
     const pend = this.st.pendingOrders || {};
+    const now = Date.now();
     let changed = false;
     for (const [offerId, p] of Object.entries(pend)) {
       const inst = this.findPendingInstance(p);
@@ -1307,7 +1369,15 @@ export class Engine {
         changed = true;
         continue;
       }
-      if (p && Date.now() - p.at > 10 * MIN) { delete pend[offerId]; changed = true; }
+      if (!this.instancesOk || now - (p?.at || now) < 3 * MIN) continue;
+      if (p.lastMissAt && now - p.lastMissAt < MIN) continue;
+      p.listMisses = (p.listMisses || 0) + 1;
+      p.lastMissAt = now;
+      changed = true;
+      if (p.listMisses >= 2) {
+        delete pend[offerId];
+        this.log('warn', `报价 ${offerId} 连续两次实例列表都没有对应机器，解除下单锁定`);
+      }
     }
     if (changed) this.save();
   }
@@ -1643,17 +1713,23 @@ export class Engine {
   summary(list = this.instances()) {
     const active = list.filter(x => x.status === 'running' || x.phase === 'booting' || x.status === 'loading');
     const pausedStorage = list.filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted')).reduce((a, x) => a + (Number(x.storageHr) || 0), 0);
-    const spendHr = active.reduce((a, x) => a + (finiteNum(x.dph) > 0 ? x.dph : 0), 0) + pausedStorage;
+    const unknown = active.filter(x => x.managed && x.costKnown === false);
+    const knownSpend = active.reduce((a, x) => a + (finiteNum(x.dph) > 0 ? x.dph : 0), 0) + pausedStorage;
+    // 有未知费用时不把缺的当成 0，否则综合收益率会偏高。
+    const costState = unknown.length === 0 ? 'known' : (knownSpend > 0 ? 'partial' : 'unknown');
+    const spendHr = costState === 'known' ? knownSpend : null;
     // 有实测算力用实测；部署中 / 未匹配矿工的机器用预期算力（面板上标注「含预估」）
     const estimated = active.filter(x => !(x.avgHs > 0) && (x.phase === 'booting' || x.phase === 'unmatched'));
     const revenueHr = active.reduce((a, x) => a + (x.avgHs > 0 ? x.revenueHr : estimated.includes(x) ? x.expRevenueHr : 0), 0);
     const hs = active.reduce((a, x) => a + (x.avgHs || 0), 0);
     const bal = this.account.vastBalance;
+    const profitHr = spendHr == null ? null : revenueHr - spendHr;
     return {
       count: active.length, mining: active.filter(x => x.phase === 'mining' || x.phase === 'loss').length,
       abnormal: list.filter(x => ['low', 'gpu'].includes(x.health) || ['nohash', 'offline'].includes(x.phase)).length,
       estimatedCount: estimated.length,
-      spendHr, revenueHr, profitHr: revenueHr - spendHr,
+      spendHr, knownSpendHr: knownSpend, unknownCostCount: unknown.length, costState,
+      revenueHr, profitHr,
       roi: spendHr > 0 && revenueHr > 0 ? (revenueHr - spendHr) / spendHr * 100 : null,
       totalHs: hs,
       prlPerDay: this.market.price ? revenueHr * 24 / this.market.price : 0,

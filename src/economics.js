@@ -36,9 +36,10 @@ export function bandwidthHourly(raw, gbPerHour) {
   if (allowance == null || allowance < 0) return { ok: false, why: '带宽用量设置无效' };
   const upMissing = raw?.inet_up_cost == null || raw?.inet_up_cost === '';
   const downMissing = raw?.inet_down_cost == null || raw?.inet_down_cost === '';
-  if (upMissing && downMissing) return { ok: true, known: false, hr: 0 };
-  const up = upMissing ? 0 : finiteNum(raw.inet_up_cost);
-  const down = downMissing ? 0 : finiteNum(raw.inet_down_cost);
+  // 两个字段都缺：未知，不是 0。只有明确写出 0 才是免费流量。缺一边也算不齐。
+  if (upMissing || downMissing) return { ok: true, known: false, hr: null, why: '带宽单价未知' };
+  const up = finiteNum(raw.inet_up_cost);
+  const down = finiteNum(raw.inet_down_cost);
   if (up == null || down == null || up < 0 || down < 0) return { ok: false, why: '带宽单价无效' };
   return { ok: true, known: true, hr: (up + down) * allowance };
 }
@@ -68,6 +69,7 @@ export function quoteOffer(raw, cfg, { revenuePerHsHour, hashrateHs, mode } = {}
   const revenueHr = hs * revRate;
   const bw = bandwidthHourly(raw, cfg?.bandwidthGbPerHour ?? 0);
   if (!bw.ok) return { ok: false, why: bw.why };
+  if (!bw.known) return { ok: false, why: '带宽单价未知，成本不齐，不能下单' };
   const st = storageHourly(raw, cfg?.disk);
   if (!st.ok) return { ok: false, why: st.why };
   const target = finiteNum(cfg?.targetProfitPct);
@@ -238,10 +240,8 @@ export function resolveScanInterval({ baseMs, fastMs, hotActive, quotaPaceMs }) 
 // 预热只挡住算力爬坡噪声。保守满算力仍然亏钱时走更短的退出，不在预热里一直耗着。
 export function profitFloorDecision(s) {
   const floor = s.floorPct;
-  if (!s.costKnown || !(finiteNum(s.costHr) > 0)) {
-    if (s.unknownForMin >= s.unknownExitMin) return { action: 'exit', path: 'unknown-cost', reason: '费用未知，无法确认利润' };
-    return { action: 'hold', path: 'unknown-cost' };
-  }
+  // 费用未知时只停住，不按亏损退出。未知不能当成 0 元成本。
+  if (!s.costKnown || !(finiteNum(s.costHr) > 0)) return { action: 'hold', path: 'unknown-cost', reason: '费用未知，不按收益率退出' };
   const expNeg = s.marketFresh && Number.isFinite(s.expectedRoi) && s.expectedRoi < 0;
   if (expNeg && s.negForMin >= s.negExitMin) {
     return { action: 'exit', path: 'negative', reason: '即使按保守满算力，收益也覆盖不了已知成本' };
