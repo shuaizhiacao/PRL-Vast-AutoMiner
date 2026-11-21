@@ -173,9 +173,9 @@ function render() {
       <div class="stat-foot">${s.runwayHours != null ? '按当前花费可跑 <b>' + dur(s.runwayHours * 60) + '</b>' : (s.costState && s.costState !== 'known' && (s.count > 0 || s.unknownCostCount > 0) ? '费用未确认，无法估算还能跑多久' : '当前没有计费中的机器')}</div></div>`;
 
   $('#strip').innerHTML = `
-    <div><span>在租机器</span><b>${s.count}<span class="dim" style="display:inline;font-size:12px"> / ${c.maxInstances}</span></b><small>挖矿中 ${s.mining}${s.abnormal ? ` · <span class="down">异常 ${s.abnormal}</span>` : ''}</small></div>
+    <div><span>在租机器</span><b>${s.count}<span class="dim" style="display:inline;font-size:12px"> / ${c.maxInstances}</span></b><small>挖矿中 ${s.mining}${s.reservedCount ? ` · 未确认预留 ${s.reservedCount} 笔` : ''}${s.abnormal ? ` · <span class="down">异常 ${s.abnormal}</span>` : ''}</small></div>
     <div><span>总算力 · 10 分钟</span><b>${hs(s.totalHs)}</b><small>${num(s.prlPerDay, 1)} PRL / 天</small></div>
-    <div><span>每小时成本</span><b>${s.costState === 'known' ? usd(s.spendHr, 3) : '费用未知'}</b><small>${s.unknownCostCount ? `${s.unknownCostCount} 台未确认，已停止新租` : (S.budget.spendCapByRunway != null && S.budget.spendCapByRunway < c.maxHourlySpend ? `续航上限 ${usd(S.budget.spendCapByRunway, 2)}` : `上限 ${usd(c.maxHourlySpend, 2)}${c.runwayGuard ? '' : ' · 续航保护关'}`)}</small></div>
+    <div><span>每小时成本</span><b>${s.costState === 'known' ? usd(s.spendHr, 3) : '费用未知'}</b><small>${s.reservedCount ? (s.reservedUnknown ? `另有 ${s.reservedCount} 笔未确认预留，金额未知，未计入已发生花费` : `另有未确认预留 ${usd(s.reservedHr, 3)}/h，未计入已发生花费`) : (s.unknownCostCount ? `${s.unknownCostCount} 台费用未确认，已停止新租` : (S.budget.spendCapByRunway != null && S.budget.spendCapByRunway < c.maxHourlySpend ? `续航上限 ${usd(S.budget.spendCapByRunway, 2)}` : `上限 ${usd(c.maxHourlySpend, 2)}${c.runwayGuard ? '' : ' · 续航保护关'}`))}</small></div>
     <div><span>每小时收益</span><b>${usd(s.revenueHr, 3)}</b><small>${s.estimatedCount ? `含 ${s.estimatedCount} 台预估` : '全部实测'}</small></div>
     <div class="tm-roi"><span>综合收益率</span><b class="${s.costState === 'known' ? clsRoi(s.roi) : ''}">${s.costState === 'known' ? pct(s.roi) : '未知'}</b><small>目标 ${c.targetProfitPct}% · 底线 ${c.stopLossPct}%</small></div>
     <div><span>每日净利</span><b class="${s.profitHr == null ? '' : s.profitHr >= 0 ? 'up' : 'down'}">${s.profitHr == null ? '未知' : usd(s.profitHr * 24)}</b><small>${s.profitHr == null ? '有机器费用未确认' : usd(s.profitHr, 3) + ' / 小时'}</small></div>
@@ -183,6 +183,7 @@ function render() {
       return `<div><span>矿池待结算</span><b>${num((a.prlPending || 0) + kb, 3)}<span class="dim" style="display:inline;font-size:11px"> PRL</span></b><small>${kx ? `PH ${num(a.prlPending, 2)} · KX ${num(kb, 2)}` : `${num(a.nockPending, 3)} NOCK`}</small></div>`; })()}`;
 
   renderCards();
+  renderOrders();
   renderPools();
   renderOffers();
   renderTable();
@@ -249,6 +250,33 @@ function deployDone(x) {
   if (!d || !d.hashAt) return '';
   const mm = ms => `${Math.floor(ms / 60000)}分${String(Math.round(ms % 60000 / 1000)).padStart(2, '0')}秒`;
   return `部署 ${mm(d.hashAt - d.rentedAt)}${d.runningAt ? `（镜像 ${mm(d.runningAt - d.rentedAt)} · 矿工 ${mm(d.hashAt - d.runningAt)}）` : ''}`;
+}
+
+function renderOrders() {
+  const rows = S.orders || [];
+  const panel = $('#ordersPanel');
+  if (!panel) return;
+  panel.hidden = rows.length === 0;
+  const box = $('#orders');
+  if (!box) return;
+  box.innerHTML = rows.map(o => {
+    const money = o.dphKnown ? usd(o.dph, 3) + '/h 预留' : '预留金额未知';
+    const when = o.at ? new Date(o.at).toLocaleString('zh-CN', { hour12: false }) : '时间未知';
+    const title = o.kind === 'pending' ? '结果未知的下单' : (o.state === 'missing' ? '列表里已看不到' : '已回包、列表还没有');
+    return `<div class="log-row"><span><b>${esc(title)}</b> · ${esc(o.numGpus || 1)}×${esc(o.gpuName || '未知型号')} · ${money} · ${esc(when)}<br><span class="dim">${esc(o.reason || '')}</span></span><button type="button" class="small-button release-order" data-kind="${esc(o.kind)}" data-key="${esc(String(o.key))}">确认后停止占用</button></div>`;
+  }).join('') || '';
+  box.querySelectorAll('.release-order').forEach(btn => {
+    btn.onclick = () => releaseOrder(btn.dataset.kind, btn.dataset.key);
+  });
+}
+async function releaseOrder(kind, key) {
+  const ok = await confirmBox('停止占用', '这不能证明 vast 没有创建，也不能证明已经停止扣费。如果实例稍后出现或仍在账户里，可能继续计费，需要到 vast 里处理。<br>确定不再让这笔占用本程序的预算和台数？');
+  if (!ok) return;
+  try {
+    const r = await api('/api/orders/release', { kind, key, confirm: true });
+    toast(r.adopted || r.listed ? '列表里已经有对应机器，没有释放' : '已停止占用。这不能证明没有创建或已经停费');
+  } catch (e) { toast(e.message, true); }
+  refresh();
 }
 
 function renderCards() {

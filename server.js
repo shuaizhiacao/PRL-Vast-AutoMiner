@@ -56,6 +56,13 @@ if (boot.proxy && !process.env.PRL_PROXY_APPLIED) {
       if (!/^(::1|127\.|::ffff:127\.)/.test(ra)) return send(res, 403, { error: '仅允许本机访问' });
 
       if (p === '/api/state' && req.method === 'GET') return send(res, 200, engine.snapshot());
+      if (p === '/api/orders/release' && req.method === 'POST') {
+        const b = await body(req);
+        const confirm = b.confirm === true;
+        if (b.kind === 'pending') return send(res, 200, await engine.releasePending(b.key, { confirm }));
+        if (b.kind === 'unlisted') return send(res, 200, await engine.releaseUnlisted(b.key, { confirm }));
+        return send(res, 400, { error: '无效的订单类型' });
+      }
       if (p === '/api/settings' && req.method === 'POST') return send(res, 200, { ok: true, ...engine.updateConfig(await body(req)) });
       if (p === '/api/scan' && req.method === 'POST') { await engine.scan(true); return send(res, 200, { ok: true }); }
       let m;

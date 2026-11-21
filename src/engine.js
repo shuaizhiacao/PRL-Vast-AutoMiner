@@ -65,6 +65,7 @@ export class Engine {
     this.st.ledger ||= {};
     this.st.ledgerHist ||= [];
     this.st.failovers ||= [];
+    this.recoverInterruptedOrders();
   }
 
   // ---------- 矿池 ----------
@@ -90,6 +91,28 @@ export class Engine {
     console.log(`[${level}] ${msg}`);
   }
   save() { saveState(this.st); }
+
+  // 磁盘上的 inflight 只可能来自上次进程：记录已经写上，但创建请求的结果没有写回来。
+  // 不能把它当成「还在这次进程里发送」，也不能再 PUT 一次。
+  recoverInterruptedOrders() {
+    let changed = false;
+    for (const p of Object.values(this.st.pendingOrders || {})) {
+      if (p?.state !== 'inflight') continue;
+      p.state = 'unknown';
+      p.unknownReason = '程序在提交过程中中断，不能确定 vast 是否已经创建';
+      changed = true;
+    }
+    if (changed) this.save();
+  }
+
+  async withOrderLock(fn) {
+    const prev = this._orderTail || Promise.resolve();
+    let done;
+    this._orderTail = new Promise(resolve => { done = resolve; });
+    await prev;
+    try { return await fn(); }
+    finally { done(); }
+  }
   get table() { return hashrateTable(this.st.calib); }
   // 只算 PRL 的收益（按 Pearlhash 1% 手续费）
   get usdHsHrPrl() { return this.prlRate('pearlhash'); }
@@ -330,19 +353,16 @@ export class Engine {
       this.instanceListFetchedAt = Date.now();
       if (this.vastFailSince && Date.now() - this.vastFailSince > 3 * MIN) this.log('info', `vast 连接已恢复（中断了 ${Math.round((Date.now() - this.vastFailSince) / MIN)} 分钟）`);
       this.vastFailSince = null;
+      let seenChanged = false;
       for (const i of this.rawInstances) {
         const m = this.st.managed[String(i.id)];
-        if (m && !m.runningAt && i.actual_status === 'running') { m.runningAt = Date.now(); this.save(); }
+        if (!m) continue;
+        if (!m.seenInList) { m.seenInList = true; m.seenAt = Date.now(); seenChanged = true; }
+        if (!m.runningAt && i.actual_status === 'running') { m.runningAt = Date.now(); seenChanged = true; }
       }
-      // 已不存在的托管实例清理掉
-      const ids = new Set(this.rawInstances.map(i => String(i.id)));
-      for (const id of Object.keys(this.st.managed)) {
-        if (!ids.has(id) && Date.now() - this.st.managed[id].rentedAt > 3 * MIN) {
-          this.log('warn', `实例 ${id} 已不在 vast 列表中（可能被手动销毁或被平台回收）`);
-          delete this.st.managed[id]; this.save();
-        }
-      }
-      await this.reconcilePending();
+      if (seenChanged) this.save();
+      // 不在列表里的记录继续占额。空列表和时间都不能证明创建没发生，也不能证明一台曾出现过的机器已经销毁。
+      await this.withOrderLock(() => this.reconcilePending());
     } catch (e) {
       this.instancesOk = false;
       this.vastFailSince ||= Date.now();
@@ -927,7 +947,11 @@ export class Engine {
         if (stuckMin > 4) await this.fetchLogs(x.id, false).catch(() => {});
         if (stuckMin > this.cfg.minerStartTimeoutMinutes) {
           const hint = this.logHint(x.id);
-          await this.destroy(x.id, `开机后 ${this.cfg.minerStartTimeoutMinutes} 分钟矿工仍未上线${hint ? '：' + hint : '（机器日志里没有矿工输出）'}`, 24 * 60);
+          const churn = m.rentMode === 'interruptible';
+          const why = churn
+            ? `开机后 ${this.cfg.minerStartTimeoutMinutes} 分钟矿工仍未上线（可中断实例，销毁以停止计费，不把主机当成故障拉黑）${hint ? '：' + hint : ''}`
+            : `开机后 ${this.cfg.minerStartTimeoutMinutes} 分钟矿工仍未上线${hint ? '：' + hint : '（机器日志里没有矿工输出）'}`;
+          await this.destroy(x.id, why, churn ? 0 : 24 * 60);
           continue;
         }
       }
@@ -1057,6 +1081,27 @@ export class Engine {
     return why;
   }
 
+  // 只统计还没被实例列表确认的下单预留。已回包的 managed 记录另计为实际占用，这里不加。
+  openHolds(ignoreOffer = null) {
+    let spend = 0, count = 0, unknown = 0;
+    const pend = this.st?.pendingOrders || {};
+    for (const [k, p] of Object.entries(pend)) {
+      if (ignoreOffer != null && String(k) === String(ignoreOffer)) continue;
+      count++;
+      const d = finiteNum(p?.dph);
+      if (d > 0) spend += d;
+      else unknown++;
+    }
+    for (const [k, d] of (this.reservations || new Map()).entries()) {
+      if (ignoreOffer != null && String(k) === String(ignoreOffer)) continue;
+      if (pend[k]) continue;
+      count++;
+      if (finiteNum(d) > 0) spend += d;
+      else unknown++;
+    }
+    return { spend, count, unknown };
+  }
+
   reservedSpend(ignoreOffer = null) {
     let n = 0;
     const pend = this.st?.pendingOrders || {};
@@ -1126,8 +1171,12 @@ export class Engine {
       .filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted'))
       .reduce((a, x) => a + (finiteNum(x.storageHr) > 0 ? x.storageHr : 0), 0);
     const slots = active.length + extra.slots + this.heldSlots(ignoreOffer);
+    const holds = this.openHolds(ignoreOffer);
     return {
       count: active.length + extra.slots, spend, pausedStorage, costUnknown,
+      reservedHr: holds.unknown ? null : holds.spend,
+      reservedCount: holds.count,
+      reservedUnknown: holds.unknown,
       roomCount: Math.max(0, this.cfg.maxInstances - slots),
       roomSpend: costUnknown ? 0 : this.cfg.maxHourlySpend - spend - pausedStorage,
       roomBalance: (this.account.vastBalance ?? 0) - this.cfg.minBalanceReserve,
@@ -1274,7 +1323,7 @@ export class Engine {
       foreground: this.cfg.launchMode === 'args',
     });
     const pending = {
-      at: Date.now(), state: 'inflight', token, offerId: offer.id, machineId: offer.machineId,
+      at: Date.now(), state: 'inflight', persistedBeforePut: true, token, offerId: offer.id, machineId: offer.machineId,
       gpuName: offer.gpuName, numGpus: offer.numGpus, expectedTh: offer.th, dph: priced.total,
       bid: priced.bid, rentMode: priced.rentMode, inetDown: offer.inetDown ?? null,
       pools: poolIds, pool: def, mode: this.cfg.launchMode === 'args' ? 'args' : 'ssh', label,
@@ -1324,6 +1373,7 @@ export class Engine {
       const unknown = e.status === 0 || e.status === 408 || e.status === 429 || (e.status >= 500) || /超时|网络错误/.test(e.message || '');
       if (unknown) {
         pending.state = 'unknown';
+        pending.unknownReason = `下单结果未知：${e.message}。空列表不能证明没有创建`;
         this.st.pendingOrders[offerKey] = pending;
         this.save();
         try { await this.refreshVast(); } catch { /* 结果未知时连刷新失败也要保持锁定 */ }
@@ -1393,12 +1443,13 @@ export class Engine {
     return { ok: true, raw, quote };
   }
 
-  rememberRent(id, pending) {
+  rememberRent(id, pending, { seen = false } = {}) {
     this.st.managed[String(id)] = {
       offerId: pending.offerId, machineId: pending.machineId, gpuName: pending.gpuName, numGpus: pending.numGpus,
       expectedTh: pending.expectedTh, rentedAt: pending.at || Date.now(), dph: pending.dph, belowSince: null,
       inetDown: pending.inetDown ?? null, sv: SCRIPT_VERSION, pools: pending.pools, pool: pending.pool,
       mode: pending.mode, rentMode: pending.rentMode, bid: pending.bid ?? null,
+      seenInList: !!seen, seenAt: seen ? Date.now() : null,
     };
     return String(id);
   }
@@ -1427,11 +1478,96 @@ export class Engine {
     for (const [offerId, p] of Object.entries(pend)) {
       const inst = this.findPendingInstance(p);
       if (!inst) continue;
-      this.rememberRent(inst.id, p);
+      this.rememberRent(inst.id, p, { seen: true });
       delete pend[offerId];
       changed = true;
     }
     if (changed) this.save();
+  }
+
+  // 人工释放只由面板调用。自动租用、对账、空列表都不会走这里。
+  async readInstanceList() {
+    if (!this.vast?.ok) throw new Error('还没填 vast API Key，读不到实例列表，这次没有释放');
+    let rows;
+    try { rows = await this.vast.instances(); }
+    catch (e) { throw new Error(`读不到实例列表（${e.message}），不能确认结果，这次没有释放`); }
+    if (this.vast.lastListTruncated) throw new Error('实例列表没有读完，不能确认结果，这次没有释放');
+    this.rawInstances = rows || [];
+    this.instancesOk = true;
+    this.instanceListGen = (this.instanceListGen || 0) + 1;
+    this.instanceListFetchedAt = Date.now();
+    for (const i of this.rawInstances) {
+      const m = this.st.managed[String(i.id)];
+      if (m && !m.seenInList) { m.seenInList = true; m.seenAt = Date.now(); }
+    }
+    return this.rawInstances;
+  }
+
+  async releasePending(offerKey, { confirm = false } = {}) {
+    offerKey = String(offerKey || '');
+    if (!offerKey || !this.st.pendingOrders?.[offerKey]) throw new Error('没有这笔未确认订单');
+    if (confirm !== true) throw new Error('释放未确认订单需要显式确认。如果订单其实已经创建，释放后可能迟到出现并再扣一次费');
+    return this.withOrderLock(async () => {
+      if (!this.st.pendingOrders?.[offerKey]) return { ok: true, adopted: true, released: false, uncertain: false, reason: '对账时这笔订单已经认领，没有释放' };
+      await this.readInstanceList();
+      await this.reconcilePending();
+      if (!this.st.pendingOrders?.[offerKey]) {
+        this.save();
+        return { ok: true, adopted: true, released: false, uncertain: false, reason: '只读实例列表里已经有对应机器，已按已租认领，没有释放' };
+      }
+      delete this.st.pendingOrders[offerKey];
+      this.save();
+      this.log('warn', `已按确认释放未确认订单 ${offerKey}。这不能证明 vast 没有创建；如果实例稍后出现，可能已经在计费，需要到 vast 上处理`);
+      return { ok: true, adopted: false, released: true, uncertain: true, reason: '列表里现在没有对应机器。这仍不能证明当时没有创建' };
+    });
+  }
+
+  async releaseUnlisted(instanceId, { confirm = false } = {}) {
+    const id = String(instanceId || '');
+    const m = this.st.managed?.[id];
+    if (!m) throw new Error('没有这笔未出现在列表里的创建记录');
+    if ((this.rawInstances || []).some(i => String(i.id) === id)) throw new Error('这台实例正在列表里，不能按未确认记录释放；要停止计费请退租');
+    if (confirm !== true) throw new Error('停止计入需要显式确认。如果实例还在 vast 上，释放后程序不再占额，但 vast 仍可能继续扣费');
+    return this.withOrderLock(async () => {
+      if (!this.st.managed?.[id]) return { ok: true, released: false, uncertain: false, reason: '记录已经不在' };
+      await this.readInstanceList();
+      if ((this.rawInstances || []).some(i => String(i.id) === id)) {
+        const kept = this.st.managed[id];
+        if (kept) { kept.seenInList = true; kept.seenAt = Date.now(); this.save(); }
+        return { ok: true, listed: true, released: false, uncertain: false, reason: '只读列表里已经有这台实例，没有释放' };
+      }
+      delete this.st.managed[id];
+      this.save();
+      this.log('warn', `已按确认停止计入实例 ${id}。列表里现在没有它，但这不能证明 vast 已经停止扣费`);
+      return { ok: true, listed: false, released: true, uncertain: true, reason: '列表里现在没有这台实例。这仍不能证明已经销毁或从未创建' };
+    });
+  }
+
+  ordersView() {
+    const ids = new Set((this.rawInstances || []).map(i => String(i.id)));
+    const money = dph => {
+      const n = finiteNum(dph);
+      return { dph: n != null && n > 0 ? n : null, dphKnown: n != null && n > 0 };
+    };
+    const pending = Object.entries(this.st.pendingOrders || {}).map(([key, p]) => ({
+      kind: 'pending', key, state: p?.state || 'unknown', certain: false,
+      at: p?.at || null, ...money(p?.dph), gpuName: p?.gpuName || '', numGpus: p?.numGpus || 1,
+      machineId: p?.machineId ?? null, offerId: p?.offerId ?? key, rentMode: p?.rentMode || null,
+      occupiesSlot: true,
+      reason: p?.state === 'inflight'
+        ? '创建请求已写入本地，正在等待 vast 的结果。现在还不能确定是否已经创建'
+        : (p?.unknownReason || '下单结果未知。空列表不能证明没有创建'),
+    }));
+    const unlisted = Object.entries(this.st.managed || {}).filter(([id]) => !ids.has(String(id))).map(([id, m]) => ({
+      kind: 'unlisted', key: id, instanceId: id, state: m?.seenInList ? 'missing' : 'accepted', certain: false,
+      at: m?.rentedAt || null, ...money(m?.dph), gpuName: m?.gpuName || '', numGpus: m?.numGpus || 1,
+      machineId: m?.machineId ?? null, offerId: m?.offerId ?? null, rentMode: m?.rentMode || null,
+      occupiesSlot: true,
+      reason: m?.seenInList
+        ? '这台曾出现在实例列表，最近一次列表里没有。不能确定是否已销毁，记下的费用仍占用'
+        : 'vast 已返回实例编号，但列表里还没有这台。费用按记下的合计占用，直到列表出现或你确认停止计入',
+    }));
+    return [...pending, ...unlisted];
   }
 
   rigLabel(gpuName, pool, token) {
@@ -1778,11 +1914,13 @@ export class Engine {
     const hs = active.reduce((a, x) => a + (x.avgHs || 0), 0);
     const bal = this.account.vastBalance;
     const profitHr = spendHr == null ? null : revenueHr - spendHr;
+    const holds = this.openHolds();
     return {
       count: active.length + extra.slots, mining: active.filter(x => x.phase === 'mining' || x.phase === 'loss').length,
       abnormal: list.filter(x => ['low', 'gpu'].includes(x.health) || ['nohash', 'offline'].includes(x.phase)).length,
       estimatedCount: estimated.length,
       spendHr, knownSpendHr: knownSpend, unknownCostCount: unknownCount, costState,
+      reservedHr: holds.unknown ? null : holds.spend, reservedCount: holds.count, reservedUnknown: holds.unknown,
       revenueHr, profitHr,
       roi: spendHr > 0 && revenueHr > 0 ? (revenueHr - spendHr) / spendHr * 100 : null,
       totalHs: hs,
@@ -1846,6 +1984,7 @@ export class Engine {
       account: this.account,
       summary: this.summary(list),
       budget: this.budget(list),
+      orders: this.ordersView(),
       preflight: this.preflight(),
       instances: list,
       offers: this.offers.slice(0, 80),
