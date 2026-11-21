@@ -144,7 +144,7 @@
               <button class="small-button" id="btnScan">立即扫描</button>
             </div>
           </header>
-          <p class="assumption-note">收益率 = (预计收益 − 时租) ÷ 时租。预计收益用<b>实时币价 + 链上全网算力</b>计算，算力优先用你租过的实测值；标<span class="tag est">估算</span>的型号不会被自动租用。</p>
+          <p class="assumption-note">收益率 = (预计收益 − 总费用) ÷ 总费用。总费用含出价或按需算力价、存储，以及报价里给出的流量单价。排序用保守算力/美元，不按 FLOPS。标<span class="tag est">估算</span>的型号不会被自动租用。vast.ai 条款禁止用信用卡购买的余额挖矿。</p>
           <div class="table-scroll">
             <table class="data-table" id="offers">
               <thead><tr>
@@ -200,13 +200,15 @@
         <div class="form-grid">
           <label class="span-2">vast.ai API Key<input name="vastApiKey" type="password" placeholder="vast 网页左侧 Keys → 创建"></label>
           <p class="field-help span-2" style="margin:0">每个矿池的钱包地址、NOCK 地址、默认矿池在左侧「矿池」页设置。</p>
+          <p class="field-help span-2" style="margin:0">vast.ai 条款禁止用<strong>信用卡购买的余额</strong>挖矿（包括 PRL）。请自行确认充值方式。本程序不检测付款来源。</p>
         </div>
       </div>
       <div class="form-section">
         <h3>策略</h3>
         <div class="form-grid">
-          <label>目标收益率 %<input name="targetProfitPct" type="number" step="1"><small class="field-help">利润 ÷ 租金，达到才租</small></label>
-          <label>止损线 %<input name="stopLossPct" type="number" step="1"><small class="field-help">实测低于它持续一段时间就退租</small></label>
+          <label>目标收益率 %<input name="targetProfitPct" type="number" step="1"><small class="field-help">利润 ÷ 总费用，达到才自动租</small></label>
+          <label>利润底线 %<input name="stopLossPct" type="number" step="1"><small class="field-help">正数表示收益率低于这个底线就退出。12 = 利润不足 12% 就退，不是允许亏 12%。负数才是容忍亏损</small></label>
+          <label class="span-2">租用方式<select name="rentMode"><option value="interruptible">可中断（出价，新搜索默认）：更便宜，可能被抢占</option><option value="ondemand">按需 on-demand：更贵，不会因出价被停</option></select><small class="field-help">只影响之后的新搜索和新订单。自动租用默认仍是关闭</small></label>
           <label>最多同时租几台<input name="maxInstances" type="number" step="1" min="0"><small class="field-help">包括你手动租的机器</small></label>
           <label>每小时最多花费 $<input name="maxHourlySpend" type="number" step="0.1" min="0"><small class="field-help">所有机器时租加起来</small></label>
           <label class="check"><input type="checkbox" name="runwayGuard"> 续航保护</label>
@@ -218,12 +220,17 @@
         <div class="form-section">
           <div class="form-grid">
             <label>余额保留 $<input name="minBalanceReserve" type="number" step="0.5"><small class="field-help">低于它停止新租</small></label>
-            <label>止损持续分钟<input name="stopLossMinutes" type="number" step="1"></label>
+            <label>底线持续分钟<input name="stopLossMinutes" type="number" step="1"><small class="field-help">低于利润底线要持续这么久才退。短预热内不因算力爬坡退出</small></label>
+            <label>算力预热分钟<input name="hashWarmupMinutes" type="number" step="1"><small class="field-help">刚出算力的这段时间不判利润底线</small></label>
+            <label>满算力仍亏的退出分钟<input name="negativeExitMinutes" type="number" step="1"><small class="field-help">就算跑到保守满算力也覆盖不了成本时，不必等满底线计时</small></label>
             <label>部署超时分钟<input name="bootTimeoutMinutes" type="number" step="1"><small class="field-help">租下或重启后超时无算力自动退租</small></label>
             <label>矿工启动超时分钟<input name="minerStartTimeoutMinutes" type="number" step="1"><small class="field-help">机器开机后矿工迟迟不上线就提前退租</small></label>
+            <label>出价上浮 %<input name="bidUpliftPct" type="number" step="0.5"><small class="field-help">在 vast 的 min_bid（美元/小时）上加这么多，建议 2–5。仍会被目标收益率和预算封顶</small></label>
             <label>算力异常线 %<input name="hashLowPct" type="number" step="1"><small class="field-help">实测低于预期的这个比例就标红</small></label>
-            <label>最短扫描间隔（秒）<input name="scanIntervalSec" type="number" step="10"><small class="field-help">vast 每日搜索额度按条数计，程序会按额度自动放慢</small></label>
-            <label>每次搜索条数<input name="scanRows" type="number" step="10"><small class="field-help">只取每美元算力最高的前 N 台，越小越省额度</small></label>
+            <label>慢扫描间隔（秒）<input name="scanIntervalSec" type="number" step="10"><small class="field-help">平时的搜索间隔。退出和止损不看这个间隔</small></label>
+            <label>一轮搜索条数<input name="scanRows" type="number" step="1"><small class="field-help">各型号按最低时租取一小页，合计大约这么多条。按算力/美元排序，不用 FLOPS</small></label>
+            <label>热扫描间隔（秒）<input name="hotScanIntervalSec" type="number" step="1"><small class="field-help">只在收益上升或新出现达标机器时用，30–60 秒。降价不会触发</small></label>
+            <label>热扫描最长秒数<input name="hotScanTtlSec" type="number" step="10"><small class="field-help">到点或达到次数后必须冷却，避免把搜索额度刷完</small></label>
             <label>最低可靠性<input name="minReliability" type="number" step="0.01"></label>
             <label>最低下行带宽 Mbps<input name="minInetDown" type="number" step="1"></label>
             <label>单机最多 GPU 数<input name="maxGpusPerMachine" type="number" step="1"></label>

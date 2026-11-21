@@ -1,10 +1,14 @@
 // 核心引擎：行情 → 市场扫描 → 自动租用部署 → 实时利润监控 → 自动退租
 import { Vast } from './vast.js';
 import * as P from './pearl.js';
-import { gpuKey, hashrateTable } from './gpus.js';
+import { gpuKey, hashrateTable, searchNamesFor } from './gpus.js';
 import { buildOnstart, workerName, SCRIPT_VERSION } from './onstart.js';
 import { POOLS, POOL_IDS, poolName, minerTarget, fetchKryptexInfo, fetchKryptexWorkers, fetchKryptexEarned, resolveSrbUrl, SRB_FALLBACK } from './pools.js';
 import { loadConfig, saveConfig, loadState, saveState, appendLog, DEFAULT_CONFIG } from './store.js';
+import {
+  quoteOffer, planBid, rankByHashPerDollar, viableModelKeys, modelProbePlan, hotDecision, resolveScanInterval,
+  profitFloorDecision, sustainedStats, isPreempted, finiteNum, rentModeOf, storageHourly,
+} from './economics.js';
 
 const MIN = 60_000;
 const LABEL = 'prl-auto';
@@ -122,6 +126,8 @@ export class Engine {
     this.loop(() => this.refreshKryptex(), 30_000, 3000);
     this.loop(() => this.refreshVast(), 30_000);
     this.loop(() => this.refreshWildrig(), 6 * 60 * MIN);
+    // 扫描自己看 scanPlan()。这里固定 20 秒醒一次，只决定「现在该不该搜」。
+    // 退出、掉线和抢占销毁在 decide() 里，不跟慢扫描走。
     this.loop(() => this.scanTick(), 20_000, 8000);
     this.loop(() => this.decide(), 20_000, 15000);
   }
@@ -178,7 +184,10 @@ export class Engine {
         this._nockPriceAt = Date.now();
       } catch (e) { if (!this._nockWarned) { this._nockWarned = true; this.log('warn', `NOCK 价格获取失败（不影响 PRL 计算）：${e.message}`); } }
     }
-    if (price.status === 'fulfilled' && chain.status === 'fulfilled' && this.market.reward) this.market.updatedAt = Date.now();
+    if (price.status === 'fulfilled' && chain.status === 'fulfilled' && this.market.reward) {
+      this.market.updatedAt = Date.now();
+      this.considerHot({ qualifyingFresh: 0, roomToRent: !this.instancesOk || this.budget(this.instances()).roomCount > 0 });
+    }
     // 偶尔一次超时很正常（数据 15 秒后会再拉），连续 3 次失败才记日志，恢复时再记一条
     this._mktFail = errs.length ? (this._mktFail || 0) + 1 : 0;
     if (this._mktFail === 3) this.log('warn', `Pearlhash 连续 3 次获取失败：${errs.join('；')}（网络不稳定时可在设置里填代理）`);
@@ -486,6 +495,7 @@ export class Engine {
       let phase;
       if (sw) phase = 'switching';
       else if (restarting) phase = 'restarting';
+      else if (isPreempted(i, m)) phase = 'preempted';
       else if (!ACTIVE.has(i.actual_status) && i.actual_status) phase = i.intended_status === 'stopped' ? 'stopped' : 'offline';
       else if (!everSeen) phase = managed ? 'booting' : 'unmatched';
       else if (useHs === 0) phase = 'nohash';
@@ -512,6 +522,8 @@ export class Engine {
         liveHs: w && !restarting ? w.hs : 0, avgHs, expectedHs, firstHashAt, revenueHr, expRevenueHr, roi, expRoi, phase,
         belowSince: m?.belowSince || null, refSource: ref?.source || '未知型号',
         deploy: m ? { rentedAt: m.rentedAt, runningAt: m.runningAt || null, hashAt: m.hashAt || null, inetDown: m.inetDown ?? i.inet_down ?? null } : null,
+        rentMode: m?.rentMode || null,
+        storageHr: storageHourly(i, this.cfg.disk).hr || 0,
         logHint: this.logHint(id),
       };
     });
@@ -528,31 +540,96 @@ export class Engine {
     return u;
   }
 
-  // 当前应该隔多久扫一次（毫秒）以及原因
+  hotActive(now = Date.now()) {
+    const h = this.st.scanHot;
+    if (!h?.until || now >= h.until || !(h.scansLeft > 0)) return false;
+    if (!this.marketFresh || !(this.usdHsHr > 0)) return false;
+    return true;
+  }
+
+  // 当前应该隔多久扫一次（毫秒）以及原因。退出监控不看这个间隔。
   scanPlan() {
     const now = Date.now();
     const base = this.cfg.scanIntervalSec * 1000;
-    const rows = this.cfg.scanRows;
-    if (!this.cfg.autoRent) return { interval: Math.max(base, 15 * MIN), why: '自动租用未开，15 分钟看一次行情' };
+    const rows = Math.max(1, this.cfg.scanRows);
+    if (!this.cfg.autoRent) return { interval: Math.max(base, 15 * MIN), why: '自动租用未开，15 分钟看一次行情', hot: false };
     // 已到台数 / 预算上限：扫了也租不了，不浪费额度
     if (this.instancesOk) {
       const b = this.budget(this.instances());
-      if (b.roomCount <= 0) return { skip: true, why: `已租满 ${this.cfg.maxInstances} 台，暂停扫描` };
-      if (b.roomSpend < 0.02) return { skip: true, why: '已到每小时花费上限，暂停扫描' };
-      if (b.roomBalance <= 0) return { skip: true, why: '余额低于保留金额，暂停扫描' };
-      if (b.spendCapByRunway != null && b.spend + 0.02 >= b.spendCapByRunway) return { skip: true, why: '余额不够续航，暂停扫描' };
+      if (b.roomCount <= 0) return { skip: true, why: `已租满 ${this.cfg.maxInstances} 台，暂停扫描`, hot: false };
+      if (b.roomSpend < 0.02) return { skip: true, why: '已到每小时花费上限，暂停扫描', hot: false };
+      if (b.roomBalance <= 0) return { skip: true, why: '余额低于保留金额，暂停扫描', hot: false };
+      if (b.spendCapByRunway != null && b.spend + 0.02 >= b.spendCapByRunway) return { skip: true, why: '余额不够续航，暂停扫描', hot: false };
     }
-    // 额度分摊：vast 告诉了剩余额度就用它；否则用自己学到的每日额度
+    // 额度分摊：用自己学到的每日额度。热扫描不能快过这个分摊。
     const msLeft = this.nextUtcMidnight() - now;
-    let remaining = null, src = '';
-    if (this.st.quotaEst) { remaining = Math.max(0, this.st.quotaEst * 0.9 - this.usageToday().rows); src = '按学到的每日额度'; }
-    if (remaining != null) {
+    let quotaPaceMs = null, src = '';
+    if (this.st.quotaEst) {
+      const remaining = Math.max(0, this.st.quotaEst * 0.9 - this.usageToday().rows);
+      src = '按学到的每日额度';
       const scansLeft = Math.floor(remaining / rows) - 1; // 留一次给手动扫描
-      if (scansLeft <= 0) return { interval: msLeft, why: `今日额度快用完（${src}），等 ${new Date(now + msLeft).toLocaleTimeString('zh-CN', { hour12: false })} 重置` };
-      const pace = msLeft / scansLeft;
-      return { interval: Math.max(base, pace), why: pace > base ? `${src}：剩 ${scansLeft} 次，均匀分摊到重置前` : '' };
+      if (scansLeft <= 0) return { interval: msLeft, why: `今日额度快用完（${src}），等 ${new Date(now + msLeft).toLocaleTimeString('zh-CN', { hour12: false })} 重置`, hot: false };
+      quotaPaceMs = msLeft / scansLeft;
     }
-    return { interval: base, why: '' };
+    const hot = this.hotActive(now);
+    const resolved = resolveScanInterval({
+      baseMs: base,
+      fastMs: this.cfg.hotScanIntervalSec * 1000,
+      hotActive: hot,
+      quotaPaceMs,
+    });
+    let why = '';
+    if (resolved.why === 'hot') why = this.st.scanHot?.why || '热扫描';
+    else if (resolved.why === 'quota-blocks-hot') why = `${src}：额度紧，热扫描不加快`;
+    else if (quotaPaceMs != null && quotaPaceMs > base) why = `${src}：均匀分摊到重置前`;
+    return { interval: resolved.interval, why, hot: resolved.why === 'hot' };
+  }
+
+  considerHot({ qualifyingFresh = 0, roomToRent = true } = {}) {
+    const now = Date.now();
+    const usd = this.usdHsHr;
+    const prev = this.st.revenueMark;
+    if (!(usd > 0) || !this.marketFresh) return;
+    if (!prev) { this.st.revenueMark = { usd, t: now }; this.save(); return; }
+    const d = hotDecision({
+      fresh: this.marketFresh, usd, prevUsd: prev.usd, roomToRent,
+      qualifyingFresh, coolUntil: this.st.scanHot?.coolUntil || 0, now,
+      upPct: this.cfg.revenueHotPct, badMarket: false,
+    });
+    if (d.mark) this.st.revenueMark = { usd, t: now };
+    if (d.arm) this.armHot(d.why);
+    else this.save();
+  }
+
+  armHot(why) {
+    const now = Date.now();
+    const h = this.st.scanHot;
+    if (h?.coolUntil > now) return false;
+    if (h?.until > now && h.scansLeft > 0) return false; // 不延长已经打开的窗口，避免一直刷新
+    this.st.scanHot = { until: now + this.cfg.hotScanTtlSec * 1000, scansLeft: this.cfg.hotMaxScans, why, armedAt: now };
+    this.save();
+    this.log('info', `加快扫描（最多 ${this.cfg.hotMaxScans} 次或 ${this.cfg.hotScanTtlSec} 秒）：${why}`);
+    return true;
+  }
+
+  consumeHotScan() {
+    const h = this.st.scanHot;
+    if (!h?.until) return;
+    h.scansLeft = (h.scansLeft || 1) - 1;
+    if (h.scansLeft <= 0 || Date.now() >= h.until) {
+      this.st.scanHot = { coolUntil: Date.now() + this.cfg.hotCooldownSec * 1000, why: '热扫描结束' };
+    }
+    this.save();
+  }
+
+  noteQualifying(offers) {
+    const ids = offers.filter(o => o.rentable && o.autoOk && !o.blacklisted && o.roi >= this.cfg.targetProfitPct).map(o => String(o.id));
+    const prev = this.st.seenQualifying;
+    const fresh = prev ? ids.filter(id => !prev.includes(id)).length : 0;
+    this.st.seenQualifying = ids.slice(0, 300);
+    let room = true;
+    if (this.instancesOk) room = this.budget(this.instances()).roomCount > 0 && this.budget(this.instances()).roomSpend > 0.02;
+    this.considerHot({ qualifyingFresh: fresh, roomToRent: room });
   }
 
   async scanTick() {
@@ -574,27 +651,43 @@ export class Engine {
       if (!force) return;
     }
     this.lastScanAttempt = Date.now();
+    const wasHot = this.hotActive();
     const meta = {};
     try {
       let sq = this.scanQuery();
       let raw;
-      try { raw = await this.vast.searchOffers(this.cfg, meta, sq.names); }
-      catch (e) {
+      let requests = 1;
+      let rows = 0;
+      try {
+        if (sq.mode === 'focused') {
+          const probed = await this.probeModels(sq);
+          raw = probed.raw;
+          requests = probed.requests;
+          rows = probed.rows;
+          Object.assign(meta, probed.meta || {});
+        } else {
+          raw = await this.vast.searchOffers(this.cfg, meta, null, { limit: this.cfg.scanRows });
+          rows = raw.length;
+        }
+      } catch (e) {
         // 万一 vast 不接受按型号过滤：本次改用全量搜索，之后不再用精准搜索
         if (sq.mode !== 'focused' || e.status === 429 || !(e.status >= 400 && e.status < 500)) throw e;
         this.focusedOff = true;
         this.log('warn', `vast 不接受按型号精准搜索（${e.message.slice(0, 80)}），改回全量搜索`);
         sq = { mode: 'broad' };
-        raw = await this.vast.searchOffers(this.cfg, meta);
+        raw = await this.vast.searchOffers(this.cfg, meta, null, { limit: this.cfg.scanRows });
+        requests = 1;
+        rows = raw.length;
       }
       this.learnVastNames(raw);
       const u = this.usageToday();
-      u.requests++; u.rows += raw.length;
+      u.requests += requests; u.rows += rows;
       this.readQuotaHeaders(meta.headers);
       this.save();
       this.offerStats.error = null;
       this.evaluateOffers(raw);
-      this.offerStats.mode = sq.mode === 'focused' ? `精准搜索 ${sq.models} 个型号` : '全量搜索';
+      this.offerStats.mode = sq.mode === 'focused' ? `精准搜索 ${requests} 个型号（可达标 ${sq.models}）` : '全量搜索';
+      if (wasHot) this.consumeHotScan();
     } catch (e) {
       this.offerStats.error = e.message;
       if (e.status === 429) {
@@ -622,17 +715,50 @@ export class Engine {
     }
   }
 
-  // 精准搜索：只搜「有算力数据、按当前币价有可能达到目标收益率」的型号。
-  // vast 的型号名要原样匹配，所以从全量搜索结果里学；每 6 次搜索做一次全量，发现新型号
+  // 精准搜索：所有按当前收益有可能达标的已知型号，不写死某几张卡。
+  // 每 6 次做一次全量，用来学习 vast 上的型号写法。型号多时一轮只查其中几款的最低价，下轮轮转。
   scanQuery() {
     this.scanN = (this.scanN || 0) + 1;
-    const usd = this.usdHsHr, names = this.st.vastNames || {};
-    if (this.focusedOff || !(usd > 0) || !Object.keys(names).length || this.scanN % 6 === 1) return { mode: 'broad' };
-    const t = this.cfg.targetProfitPct;
-    const keys = this.table.filter(g => g.autoOk && g.effective * 1e12 * usd / (1 + t / 100) >= MIN_GPU_PRICE).map(g => g.key);
-    const list = [...new Set(keys.flatMap(k => names[k] || []))].slice(0, 120);
-    if (!list.length) return { mode: 'broad' };
-    return { mode: 'focused', names: list, models: keys.filter(k => names[k]?.length).length };
+    const usd = this.usdHsHr;
+    const learned = this.st.vastNames || {};
+    if (this.focusedOff || !(usd > 0) || this.scanN % 6 === 1) return { mode: 'broad' };
+    const keys = viableModelKeys(this.table, usd, this.cfg.targetProfitPct, MIN_GPU_PRICE);
+    const modelNames = keys.map(k => {
+      const g = this.table.find(x => x.key === k);
+      return { key: k, names: searchNamesFor(g, learned[k] || []) };
+    }).filter(m => m.names.length);
+    if (!modelNames.length) return { mode: 'broad' };
+    return { mode: 'focused', modelNames, models: modelNames.length };
+  }
+
+  async probeModels(sq) {
+    const plan = modelProbePlan({
+      modelNames: sq.modelNames,
+      scanRows: this.cfg.scanRows,
+      maxProbes: this.cfg.scanMaxProbes,
+      cursor: this.st.probeCursor || 0,
+    });
+    this.st.probeCursor = plan.nextCursor;
+    const raw = [];
+    const seen = new Set();
+    let rows = 0;
+    let meta = {};
+    if (!plan.probes.length) {
+      const one = await this.vast.searchOffers(this.cfg, meta, null, { limit: this.cfg.scanRows });
+      return { raw: one, requests: 1, rows: one.length, meta };
+    }
+    for (const p of plan.probes) {
+      const meta1 = {};
+      const part = await this.vast.searchOffers(this.cfg, meta1, p.names, { limit: p.limit });
+      meta = meta1;
+      rows += part.length;
+      for (const o of part) {
+        if (seen.has(o.id)) continue;
+        seen.add(o.id);
+        raw.push(o);
+      }
+    }
+    return { raw, requests: plan.probes.length, rows, meta };
   }
   learnVastNames(raw) {
     const names = this.st.vastNames ||= {};
@@ -656,21 +782,40 @@ export class Engine {
     this.st.rateLimitHeaders = { limit, remaining, seenAt: Date.now() };
   }
 
-  // 用最新行情重算每台机器的收益率（扫描结果可能是几分钟前的，币价/全网算力随时在变）
+  pricingOf(raw) {
+    return {
+      min_bid: raw.min_bid, dph_total: raw.dph_total, dph_base: raw.dph_base, storage_cost: raw.storage_cost,
+      inet_up_cost: raw.inet_up_cost, inet_down_cost: raw.inet_down_cost,
+      search: raw.search ? { diskHour: raw.search.diskHour, gpuCostPerHour: raw.search.gpuCostPerHour } : undefined,
+    };
+  }
+
+  // 用最新行情重算每台机器的收益率。缺价格或价格无效的报价标成不可租，不沿用旧 ROI。
   repriceOffers() {
     const usd = this.usdHsHr;
     const now = Date.now();
     for (const o of this.offers) {
       const ref = this.thFor(o.gpuName);
       if (ref) { o.th = ref.effective * o.numGpus; o.source = ref.source; o.autoOk = ref.autoOk; }
-      o.revenueHr = o.th * 1e12 * usd;
-      o.roi = (o.revenueHr - o.dph) / o.dph * 100;
-      o.thPer01 = o.th / (o.dph / 0.1);
+      const q = o.pricing ? quoteOffer(o.pricing, this.cfg, { revenuePerHsHour: usd, hashrateHs: (o.th || 0) * 1e12 }) : { ok: false, why: '没有报价明细' };
+      this.applyQuote(o, q);
       const bl = this.st.blacklist[o.machineId];
       o.blacklisted = bl && bl.until > now ? bl.reason : null;
     }
-    this.offers.sort((a, b) => b.roi - a.roi);
-    this.offerStats.profitable = this.offers.filter(x => x.roi >= this.cfg.targetProfitPct).length;
+    this.offers = rankByHashPerDollar(this.offers);
+    this.offerStats.profitable = this.offers.filter(x => x.rentable && x.roi >= this.cfg.targetProfitPct).length;
+  }
+
+  applyQuote(o, q) {
+    if (!q?.ok) {
+      o.rentable = false; o.quoteError = q?.why || '报价无效'; o.roi = null; o.bid = null;
+      return;
+    }
+    o.rentable = !!q.rentable; o.quoteError = q.why || '';
+    o.dph = q.dph; o.revenueHr = q.revenueHr; o.roi = q.roi; o.thPerDollar = q.thPerDollar; o.thPer01 = q.thPer01;
+    o.bid = q.bid; o.minBid = q.minBid; o.maxBid = q.maxBid; o.storageHr = q.storageHr; o.bandwidthHr = q.bandwidthHr;
+    o.rentMode = q.rentMode; o.legacyTotal = !!q.legacyTotal;
+    if (q.th) o.th = q.th;
   }
 
   evaluateOffers(raw) {
@@ -682,27 +827,29 @@ export class Engine {
       const ref = this.thFor(o.gpu_name);
       if (!ref) continue;
       known++;
-      const th = ref.effective * (o.num_gpus || 1);
-      const dph = Number(o.dph_total) || 0;
-      if (dph <= 0) continue;
-      const rev = th * 1e12 * usd;
-      const roi = (rev - dph) / dph * 100;
+      const numGpus = o.num_gpus || 1;
+      const q = quoteOffer(o, this.cfg, { revenuePerHsHour: usd, hashrateHs: ref.effective * 1e12 * numGpus });
+      if (!q.ok && !q.dph) continue;
       const bl = this.st.blacklist[o.machine_id];
-      out.push({
-        id: o.id, machineId: o.machine_id, gpuName: o.gpu_name, numGpus: o.num_gpus || 1, th,
-        dph, revenueHr: rev, roi, reliability: o.reliability2 ?? o.reliability,
+      const row = {
+        id: o.id, machineId: o.machine_id, gpuName: o.gpu_name, numGpus, th: ref.effective * numGpus,
+        reliability: o.reliability2 ?? o.reliability,
         geolocation: o.geolocation || '', inetDown: o.inet_down, cuda: o.cuda_max_good,
         source: ref.source, autoOk: ref.autoOk,
         blacklisted: bl && bl.until > now ? bl.reason : null,
-        thPer01: th / (dph / 0.1),
-      });
+        pricing: this.pricingOf(o),
+      };
+      this.applyQuote(row, q.ok ? q : { ok: false, why: q.why });
+      if (q.ok) out.push(row);
     }
-    out.sort((a, b) => b.roi - a.roi);
-    this.offers = out.slice(0, 150);
+    const ranked = rankByHashPerDollar(out);
+    this.offers = ranked.slice(0, 150);
     this.offerStats = {
-      total: raw.length, known, profitable: out.filter(x => x.roi >= this.cfg.targetProfitPct).length,
-      scannedAt: now, error: null,
+      ...this.offerStats,
+      total: raw.length, known, profitable: ranked.filter(x => x.rentable && x.roi >= this.cfg.targetProfitPct).length,
+      scannedAt: now, error: null, rejected: raw.length - ranked.length,
     };
+    this.noteQualifying(this.offers);
   }
 
   // ---------- 决策：自动退租 + 自动租用 ----------
@@ -752,6 +899,17 @@ export class Engine {
       const m = this.st.managed[x.id] || (this.st.managed[x.id] = { rentedAt: x.startedAt, gpuName: x.gpuName, numGpus: x.numGpus, machineId: x.machineId });
       // 0) 刚重启 / 正在换矿池：给它时间恢复，期间不做任何退租判断
       if (x.phase === 'restarting' || x.phase === 'switching') continue;
+      // 抢占或已停止：存储还在计费。这是可中断实例的正常退出，不拉黑主机。
+      if (x.phase === 'preempted' || x.phase === 'stopped') {
+        if (!m.pausedSince) { m.pausedSince = now; this.save(); }
+        if (now - m.pausedSince >= this.cfg.pausedDestroyMinutes * MIN) {
+          const why = x.phase === 'preempted'
+            ? '可中断实例已暂停或被抢占，销毁以停止存储继续计费'
+            : '实例已停止，销毁以停止存储继续计费';
+          await this.destroy(x.id, why, 0);
+        }
+        continue;
+      } else if (m.pausedSince) { delete m.pausedSince; this.save(); }
       // 1a) 开机后矿工迟迟不上线（正常不到 1 分钟）：卡住超过 4 分钟就去抓机器日志，超过 minerStartTimeoutMinutes 直接退租
       if (x.phase === 'booting' && x.deploy?.runningAt) {
         const stuckMin = (now - Math.max(x.deploy.runningAt, x.restartAt || 0, m.poolSetAt || 0)) / MIN;
@@ -786,18 +944,85 @@ export class Engine {
           continue;
         }
       }
-      // 3) 止损：实时收益率持续低于止损线（行情数据不新鲜、或出算力不满 10 分钟时不判断）
-      if (!this.marketFresh) continue;
-      if (!x.firstHashAt || now - x.firstHashAt < (POOLS[x.pool]?.perGpu ? 10 : KX_WARMUP_MIN) * MIN) continue;
-      if (x.roi !== null && x.roi < this.cfg.stopLossPct) {
-        if (!m.belowSince) { m.belowSince = now; this.save(); this.log('warn', `实例 ${x.id} 收益率 ${x.roi.toFixed(1)}% 跌破止损线 ${this.cfg.stopLossPct}%，开始计时`); }
-        else if (now - m.belowSince > this.cfg.stopLossMinutes * MIN) {
-          await this.destroy(x.id, `收益率 ${x.roi.toFixed(1)}% 持续 ${this.cfg.stopLossMinutes} 分钟低于止损线 ${this.cfg.stopLossPct}%`, 60);
-        }
-      } else if (m.belowSince && x.roi !== null) {
-        m.belowSince = null; this.save();
-        this.log('info', `实例 ${x.id} 收益率回到 ${x.roi.toFixed(1)}%，止损计时取消`);
+      // 2b) 算力样本过期：不能拿几分钟前的高算力当成还在赚钱
+      if ((m.hashAt || this.everHashed.has(x.id)) && this.poolDataOk(x.pool) && x.phase !== 'booting') {
+        const resetAt = Math.max(x.restartAt || 0, x.poolSince || 0);
+        const stats = sustainedStats(this.samples.get(String(x.id)) || [], now, resetAt, 60 * MIN, this.cfg.staleHashMinutes * MIN);
+        if (stats.stale && stats.newestAgeMs < Infinity) {
+          if (!m.staleSince) { m.staleSince = now; this.save(); }
+          if (now - m.staleSince >= this.cfg.stopLossMinutes * MIN) {
+            await this.destroy(x.id, `算力样本过期超过 ${this.cfg.stopLossMinutes} 分钟`, 6 * 60);
+            continue;
+          }
+        } else if (m.staleSince) { delete m.staleSince; this.save(); }
       }
+      // 3) 利润底线。正数底线 = 收益率低于它就退出，不是容忍同等亏损。
+      //    用持续实测算力和已知时租；预热期内不因爬坡噪声退出。满算力仍亏钱走更短的计时。
+      await this.applyFloor(x, m, now);
+    }
+  }
+
+  floorInputs(x, m, now) {
+    const cost = finiteNum(x.dph);
+    const costKnown = cost != null && cost > 0;
+    const usd = this.usdHsHrFor(x.pool);
+    const resetAt = Math.max(x.restartAt || 0, x.poolSince || 0);
+    const windowMs = Math.max(this.cfg.stopLossMinutes, this.cfg.hashWarmupMinutes) * MIN;
+    const stats = sustainedStats(this.samples.get(String(x.id)) || [], now, resetAt, windowMs, this.cfg.staleHashMinutes * MIN);
+    const sustainedRoi = stats.ok && costKnown && usd > 0 ? (stats.hs * usd - cost) / cost * 100 : null;
+    const expectedRoi = this.marketFresh && costKnown && x.expectedHs > 0 && usd > 0 ? (x.expectedHs * usd - cost) / cost * 100 : null;
+    return profitFloorDecision({
+      floorPct: this.cfg.stopLossPct,
+      costKnown, costHr: cost,
+      marketFresh: this.marketFresh && usd > 0,
+      expectedRoi, sustainedRoi,
+      sinceHashMin: x.firstHashAt ? (now - x.firstHashAt) / MIN : 0,
+      warmupMin: this.cfg.hashWarmupMinutes,
+      belowForMin: m.belowSince ? (now - m.belowSince) / MIN : 0,
+      persistMin: this.cfg.stopLossMinutes,
+      negForMin: m.negSince ? (now - m.negSince) / MIN : 0,
+      negExitMin: this.cfg.negativeExitMinutes,
+      samplesOk: stats.ok,
+      wasBelow: !!m.belowSince,
+      unknownForMin: m.unknownCostSince ? (now - m.unknownCostSince) / MIN : 0,
+      unknownExitMin: this.cfg.unknownCostMinutes,
+    });
+  }
+
+  async applyFloor(x, m, now) {
+    if (!x.firstHashAt && !(finiteNum(x.dph) > 0 && x.expectedHs > 0 && this.marketFresh)) return;
+    const d = this.floorInputs(x, m, now);
+    if (!d) return;
+    if (d.path === 'unknown-cost' && d.action === 'hold') {
+      if (!m.unknownCostSince) { m.unknownCostSince = now; this.save(); }
+    } else if (m.unknownCostSince && d.path !== 'unknown-cost') {
+      delete m.unknownCostSince; this.save();
+    }
+    if (d.action === 'exit') {
+      const shown = Number.isFinite(x.roi) ? `近期收益率 ${x.roi.toFixed(1)}%` : '没有可靠的持续收益率';
+      const bl = d.path === 'unknown-cost' ? 60 : 60;
+      await this.destroy(x.id, `${d.reason}（${shown}，底线 ${this.cfg.stopLossPct}%）`, bl);
+      return;
+    }
+    if (d.action === 'arm-floor') {
+      if (!m.belowSince) {
+        m.belowSince = now; this.save();
+        this.log('warn', `实例 ${x.id} 按持续实测算力，收益率低于利润底线 ${this.cfg.stopLossPct}%（正数表示利润不足就退出），开始计时`);
+      }
+      if (d.alsoNegative && !m.negSince) { m.negSince = now; this.save(); }
+      return;
+    }
+    if (d.action === 'arm-negative') {
+      if (!m.negSince) {
+        m.negSince = now; this.save();
+        this.log('warn', `实例 ${x.id} 即使按保守满算力也覆盖不了已知成本，${this.cfg.negativeExitMinutes} 分钟后退出`);
+      }
+      return;
+    }
+    if (d.action === 'clear' && (m.belowSince || m.negSince)) {
+      m.belowSince = null; m.negSince = null; this.save();
+      const shown = Number.isFinite(x.roi) ? x.roi.toFixed(1) : '—';
+      this.log('info', `实例 ${x.id} 收益率回到 ${shown}%，利润底线计时取消`);
     }
   }
 
@@ -815,10 +1040,14 @@ export class Engine {
   budget(list) {
     const active = list.filter(x => ACTIVE.has(x.status) || x.phase === 'booting');
     const spend = active.reduce((a, x) => a + x.dph, 0);
+    // 停止/被抢占的实例不再占 GPU，但存储还在计费，占用每小时预算。
+    const pausedStorage = list
+      .filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted'))
+      .reduce((a, x) => a + (Number(x.storageHr) || 0), 0);
     return {
-      count: active.length, spend,
+      count: active.length, spend, pausedStorage,
       roomCount: this.cfg.maxInstances - active.length,
-      roomSpend: this.cfg.maxHourlySpend - spend,
+      roomSpend: this.cfg.maxHourlySpend - spend - pausedStorage,
       roomBalance: (this.account.vastBalance ?? 0) - this.cfg.minBalanceReserve,
       spendCapByRunway: this.cfg.runwayGuard ? Math.max(0, ((this.account.vastBalance ?? 0) - this.cfg.minBalanceReserve) / this.cfg.minRunwayHours) : null, // null = 续航保护已关闭
     };
@@ -838,9 +1067,9 @@ export class Engine {
     const spendCap = this.cfg.runwayGuard ? b.roomBalance / this.cfg.minRunwayHours : Infinity;
     const now = Date.now();
     const candidates = this.offers.filter(o =>
-      o.roi >= this.cfg.targetProfitPct && o.autoOk && !o.used &&
+      o.rentable && o.roi >= this.cfg.targetProfitPct && o.autoOk && !o.used &&
       !(this.st.blacklist[o.machineId]?.until > now) &&
-      o.dph <= b.roomSpend);
+      o.dph <= b.roomSpend && finiteNum(o.dph) > 0);
     const affordable = candidates.filter(o => b.spend + o.dph <= spendCap);
     if (candidates.length && !affordable.length) {
       this._warnOnce('runway', `余额 $${this.account.vastBalance.toFixed(2)} 只够每小时花 $${spendCap.toFixed(2)}（续航 ${this.cfg.minRunwayHours} 小时），现在已花 $${b.spend.toFixed(2)}/h，停止新租；充值后会自动继续`);
@@ -852,8 +1081,9 @@ export class Engine {
       if (tries >= 8 || rented >= 5 || roomCount <= 0) break;
       if (spend + pick.dph > spendCap || pick.dph > roomSpend || b.roomBalance - used < pick.dph) continue;
       tries++;
-      const r = await this.rent(pick, 'auto').then(() => 'ok', e => e.gone ? 'gone' : 'fail');
-      if (r === 'fail') break;
+      const budgetHr = Math.min(roomSpend, spendCap - spend, Math.max(0, b.roomBalance - used));
+      const r = await this.rent(pick, 'auto', { budgetHr }).then(() => 'ok', e => e.gone ? 'gone' : (e.skip ? 'skip' : (e.unknown ? 'unknown' : 'fail')));
+      if (r === 'fail' || r === 'unknown') break;
       if (r === 'ok') { rented++; spend += pick.dph; roomSpend -= pick.dph; roomCount--; used += pick.dph; }
     }
   }
@@ -865,16 +1095,60 @@ export class Engine {
     this.log('warn', msg);
   }
 
-  async rent(offer, by = 'manual') {
-    const why = this.preflight().filter(w => by === 'auto' || !w.includes('行情'));
+  async rent(offer, by = 'manual', { budgetHr = null } = {}) {
+    const why = this.preflight();
     if (why.length) throw new Error(why.join('、'));
-    // 所有填了钱包的矿池参数都写进开机脚本，以后可以在面板上切换；先挖默认矿池
+    const offerKey = String(offer.id);
+    this.inflightRent ||= new Set();
+    this.st.pendingOrders ||= {};
+    await this.reconcilePending();
+    if (this.st.managed && Object.values(this.st.managed).some(m => String(m.offerId) === offerKey && Date.now() - m.rentedAt < 30 * MIN)) {
+      const err = new Error('这台报价刚刚已经租到，不会再下一单');
+      err.skip = true;
+      throw err;
+    }
+    if (this.inflightRent.has(offerKey) || (this.st.pendingOrders[offerKey] && Date.now() - this.st.pendingOrders[offerKey].at < 10 * MIN)) {
+      const err = new Error('这笔报价已有未确认的下单，10 分钟内不会重复提交');
+      err.unknown = true;
+      throw err;
+    }
+    const fresh = await this.refetchOffer(offer.id, { allowEstimated: by !== 'auto' });
+    if (!fresh.ok) {
+      offer.used = true;
+      if (fresh.gone) {
+        this.offers = this.offers.filter(o => o.id !== offer.id);
+        const err = new Error(fresh.why || '报价已不在');
+        err.gone = true;
+        throw err;
+      }
+      const err = new Error(fresh.why || '下单前复核报价失败');
+      err.skip = !fresh.unknown;
+      err.unknown = !!fresh.unknown;
+      err.stop = !!fresh.stop;
+      throw err;
+    }
+    const b = this.budget(this.instances());
+    const room = Math.min(b.roomSpend > 0 ? b.roomSpend : 0, b.spendCapByRunway == null ? 1e9 : Math.max(0, b.spendCapByRunway - b.spend), Math.max(0, b.roomBalance));
+    // 自动租用用剩余预算。手动租用仍不能超过「每小时最多花费」这一台的上限，但不受已经租满的剩余额度挡住（要先观察一台）。
+    const cap = budgetHr != null ? budgetHr : (by === 'manual' ? Math.max(room, this.cfg.maxHourlySpend) : room);
+    const priced = this.priceForOrder(fresh.quote, cap);
+    if (!priced.ok) {
+      offer.used = true;
+      const err = new Error(priced.why || '复核后不再满足利润或预算');
+      err.skip = true;
+      throw err;
+    }
+    offer.dph = priced.total;
+    offer.bid = priced.bid;
+    offer.roi = priced.roi;
+    offer.used = true;
     const poolIds = this.configuredPools();
     const def = this.defaultPool;
+    const token = Math.random().toString(16).slice(2, 8);
+    const label = this.rigLabel(offer.gpuName, def, token);
     const onstart = buildOnstart({
       pools: poolIds.map(id => ({ id, ...minerTarget(id, {
         wallet: this.walletFor(id), geo: offer.geolocation, pearlUrl: this.cfg.poolUrl,
-        // 填了 NOCK 地址时 Pearlhash 用户名为 prl地址@nock=NOCK地址（Pearlhash 规定的格式）
         nockAddress: id === 'pearlhash' ? this.cfg.nockAddress : '',
       }) })),
       def, minerUrls: { wr: this.wildrig.url, srb: (this.srb || SRB_FALLBACK).url },
@@ -882,29 +1156,38 @@ export class Engine {
       extraArgs: this.minerArgsFor(offer.gpuName),
       foreground: this.cfg.launchMode === 'args',
     });
-    offer.used = true;
+    const pending = {
+      at: Date.now(), state: 'inflight', token, offerId: offer.id, machineId: offer.machineId,
+      gpuName: offer.gpuName, numGpus: offer.numGpus, expectedTh: offer.th, dph: priced.total,
+      bid: priced.bid, rentMode: priced.rentMode, inetDown: offer.inetDown ?? null,
+      pools: poolIds, pool: def, mode: this.cfg.launchMode === 'args' ? 'args' : 'ssh', label,
+    };
+    this.st.pendingOrders[offerKey] = pending;
+    this.inflightRent.add(offerKey);
     this.lastRentAt = Date.now();
+    this.save();
     const tag = by === 'auto' ? '自动' : '手动';
     try {
-      const r = await this.vast.rent(offer.id, { image: this.cfg.image, disk: this.cfg.disk, label: this.rigLabel(offer.gpuName, def), onstart, mode: this.cfg.launchMode === 'args' ? 'args' : 'ssh' });
+      const r = await this.vast.rent(offer.id, {
+        image: this.cfg.image, disk: this.cfg.disk, label, onstart,
+        mode: this.cfg.launchMode === 'args' ? 'args' : 'ssh', price: priced.price,
+      });
       if (!r?.success || !r.new_contract) throw new Error(r?.msg || r?.error || JSON.stringify(r).slice(0, 160));
       const id = String(r.new_contract);
-      this.st.managed[id] = {
-        offerId: offer.id, machineId: offer.machineId, gpuName: offer.gpuName, numGpus: offer.numGpus,
-        expectedTh: offer.th, rentedAt: Date.now(), dph: offer.dph, belowSince: null, inetDown: offer.inetDown ?? null,
-        sv: SCRIPT_VERSION, pools: poolIds, pool: def, mode: this.cfg.launchMode === 'args' ? 'args' : 'ssh',
-      };
+      this.rememberRent(id, pending);
+      delete this.st.pendingOrders[offerKey];
       this.save();
-      this.log('success', `${tag}租用 ${offer.numGpus}×${offer.gpuName}（实例 ${id}）$${offer.dph.toFixed(3)}/h，挖 ${poolName(def)}，预计收益率 ${offer.roi.toFixed(1)}%`);
+      const kind = priced.rentMode === 'interruptible' ? `可中断出价 $${priced.bid.toFixed(4)}/h` : '按需';
+      this.log('success', `${tag}租用 ${offer.numGpus}×${offer.gpuName}（实例 ${id}）${kind}，合计 $${priced.total.toFixed(3)}/h，挖 ${poolName(def)}，复核收益率 ${priced.roi.toFixed(1)}%`);
       setTimeout(() => this.refreshVast(), 3000);
       return id;
     } catch (e) {
-      // no_such_ask / not available = 这台机器在扫描后被别人抢先租走了，不是机器的问题，不拉黑
-      if (/no_such_ask|not available|unavailable/i.test(e.message)) {
+      if (/no_such_ask|not available|unavailable/i.test(e.message || '')) {
+        delete this.st.pendingOrders[offerKey];
         this.offers = this.offers.filter(o => o.id !== offer.id);
         this.lastRentAt = 0;
-        this.log('info', `${offer.numGpus}×${offer.gpuName} $${offer.dph.toFixed(3)}/h 已被别人抢先租走${by === 'auto' ? '，换下一台' : ''}`);
-        // 同一台机器 2 小时内第 2 次「刚被租走」：多半是一直挂在列表里、实际租不了的机器，屏蔽 2 小时，别再浪费下单机会
+        this.save();
+        this.log('info', `${offer.numGpus}×${offer.gpuName} $${(offer.dph || 0).toFixed(3)}/h 已被别人抢先租走${by === 'auto' ? '，换下一台' : ''}`);
         if (offer.machineId) {
           const g = this.st.goneCount ||= {};
           const now = Date.now();
@@ -921,14 +1204,107 @@ export class Engine {
         err.gone = true;
         throw err;
       }
-      this.st.blacklist[offer.machineId] = { until: Date.now() + 6 * 60 * MIN, reason: '租用失败' };
+      const unknown = e.status === 0 || e.status === 408 || e.status === 429 || (e.status >= 500) || /超时|网络错误/.test(e.message || '');
+      if (unknown) {
+        pending.state = 'unknown';
+        this.st.pendingOrders[offerKey] = pending;
+        this.save();
+        try { await this.refreshVast(); } catch { /* 结果未知时连刷新失败也要保持锁定 */ }
+        const adopted = this.findPendingInstance(pending);
+        if (adopted) {
+          const id = this.rememberRent(String(adopted.id), pending);
+          delete this.st.pendingOrders[offerKey];
+          this.save();
+          this.log('warn', `下单请求没有正常返回，但实例 ${id} 已经在账户里，按已租处理，不再重下`);
+          return id;
+        }
+        this.log('error', `${tag}租用 ${offer.gpuName}（offer ${offer.id}）结果未知：${e.message}。10 分钟内不会对这笔报价再下单`);
+        const err = new Error(`下单结果未知：${e.message}`);
+        err.unknown = true;
+        throw err;
+      }
+      delete this.st.pendingOrders[offerKey];
+      if (offer.machineId) this.st.blacklist[offer.machineId] = { until: Date.now() + 6 * 60 * MIN, reason: '租用失败' };
       this.save();
       this.log('error', `${tag}租用 ${offer.gpuName}（offer ${offer.id}）失败：${e.message}`);
       throw e;
+    } finally {
+      this.inflightRent.delete(offerKey);
     }
   }
 
-  rigLabel(gpuName, pool) { return `${LABEL}-${gpuKey(gpuName)} pool=${pool}`; }
+  priceForOrder(quote, budgetHr) {
+    if (!quote?.ok) return { ok: false, why: quote?.why || '报价无效' };
+    if (!(finiteNum(this.usdHsHr) > 0) || !this.marketFresh) return { ok: false, why: '行情不新鲜或收益价无效' };
+    if (!(finiteNum(budgetHr) > 0)) return { ok: false, why: '超过每小时预算、余额保留或续航上限' };
+    if (quote.rentMode === 'interruptible') {
+      const planned = planBid({
+        minBid: quote.minBid, storageHr: quote.storageHr, bandwidthHr: quote.bandwidthHr,
+        revenueHr: quote.revenueHr, targetProfitPct: this.cfg.targetProfitPct,
+        upliftPct: this.cfg.bidUpliftPct, budgetHr,
+      });
+      if (!planned.ok) return planned;
+      return { ok: true, price: planned.bid, bid: planned.bid, total: planned.total, roi: planned.roi, rentMode: 'interruptible' };
+    }
+    if (!(quote.dph > 0) || quote.dph - budgetHr > 1e-9) return { ok: false, why: '按需时租超过预算或经济上限' };
+    if (!(quote.roi + 1e-6 >= this.cfg.targetProfitPct)) return { ok: false, why: '复核后收益率低于目标' };
+    return { ok: true, price: null, bid: null, total: quote.dph, roi: quote.roi, rentMode: 'ondemand' };
+  }
+
+  async refetchOffer(id, { allowEstimated = false } = {}) {
+    if (!this.marketFresh || !(this.usdHsHr > 0)) return { ok: false, why: '行情不新鲜或收益价无效' };
+    const meta = {};
+    let rows;
+    try { rows = await this.vast.searchOffers(this.cfg, meta, null, { id, limit: 1 }); }
+    catch (e) {
+      const quota = e.status === 429;
+      return { ok: false, why: `下单前刷新报价失败：${e.message}`, unknown: e.status === 0 || e.status >= 500, stop: quota };
+    }
+    const raw = (rows || []).find(r => String(r.id) === String(id));
+    if (!raw) return { ok: false, why: '报价已不在市场列表里', gone: true };
+    const ref = this.thFor(raw.gpu_name);
+    if (!ref) return { ok: false, why: '型号没有算力数据' };
+    if (!allowEstimated && !ref.autoOk) return { ok: false, why: '型号没有可用于自动租用的算力' };
+    const quote = quoteOffer(raw, this.cfg, { revenuePerHsHour: this.usdHsHr, hashrateHs: ref.effective * 1e12 * (raw.num_gpus || 1) });
+    if (!quote.ok) return { ok: false, why: quote.why };
+    return { ok: true, raw, quote };
+  }
+
+  rememberRent(id, pending) {
+    this.st.managed[String(id)] = {
+      offerId: pending.offerId, machineId: pending.machineId, gpuName: pending.gpuName, numGpus: pending.numGpus,
+      expectedTh: pending.expectedTh, rentedAt: pending.at || Date.now(), dph: pending.dph, belowSince: null,
+      inetDown: pending.inetDown ?? null, sv: SCRIPT_VERSION, pools: pending.pools, pool: pending.pool,
+      mode: pending.mode, rentMode: pending.rentMode, bid: pending.bid ?? null,
+    };
+    return String(id);
+  }
+
+  findPendingInstance(pending) {
+    if (!pending?.token) return null;
+    return this.rawInstances.find(i => String(i.label || '').includes(`tok=${pending.token}`)) || null;
+  }
+
+  async reconcilePending() {
+    const pend = this.st.pendingOrders || {};
+    let changed = false;
+    for (const [offerId, p] of Object.entries(pend)) {
+      const inst = this.findPendingInstance(p);
+      if (inst) {
+        this.rememberRent(inst.id, p);
+        delete pend[offerId];
+        changed = true;
+        continue;
+      }
+      if (p && Date.now() - p.at > 10 * MIN) { delete pend[offerId]; changed = true; }
+    }
+    if (changed) this.save();
+  }
+
+  rigLabel(gpuName, pool, token) {
+    const base = `${LABEL}-${gpuKey(gpuName)}`;
+    return token ? `${base} tok=${token} pool=${pool}` : `${base} pool=${pool}`;
+  }
 
   // ---------- 切换矿池 ----------
   // 改 vast 标签 → 机器上的脚本 1 分钟内读到 pool=xxx 并改连新矿池；控制端等它在新矿池出算力
@@ -1152,7 +1528,15 @@ export class Engine {
       this.log('warn', `已退租实例 ${id}（${inst ? `${inst.num_gpus}×${inst.gpu_name}` : ''}）：${reason}`);
       setTimeout(() => this.refreshVast(), 2000);
     } catch (e) {
-      this.log('error', `退租实例 ${id} 失败：${e.message}`);
+      if (e.status === 404 || /no such|not found|does not exist|404/i.test(e.message || '')) {
+        delete this.st.managed[id];
+        this.save();
+        this.log('warn', `实例 ${id} 已经不在 vast 上，按已退租处理：${reason}`);
+        return;
+      }
+      const m = this.st.managed[id];
+      if (m) { m.destroyFails = (m.destroyFails || 0) + 1; this.save(); }
+      this.log('error', `退租实例 ${id} 失败：${e.message}（下次检查会重试）`);
       throw e;
     } finally { this.busy.delete(id); }
   }
@@ -1169,8 +1553,14 @@ export class Engine {
     num('targetProfitPct', -50, 1000); num('stopLossPct', -100, 1000); num('maxInstances', 0, 200);
     num('maxHourlySpend', 0, 1000); num('minBalanceReserve', 0, 100000); num('stopLossMinutes', 1, 1440);
     num('bootTimeoutMinutes', 5, 120); num('hashLowPct', 30, 99); num('minerStartTimeoutMinutes', 3, 60); num('minRunwayHours', 1, 720); num('minReliability', 0, 1); num('minInetDown', 0, 100000);
-    num('maxGpusPerMachine', 1, 16); num('minCuda', 0, 20); num('disk', 8, 200); num('scanIntervalSec', 60, 3600); num('scanRows', 20, 1000);
+    num('maxGpusPerMachine', 1, 16); num('minCuda', 0, 20); num('disk', 8, 200); num('scanIntervalSec', 60, 3600); num('scanRows', 5, 200);
+    num('scanMaxProbes', 1, 12); num('hotScanIntervalSec', 30, 60); num('hotScanTtlSec', 60, 600); num('hotMaxScans', 1, 8); num('hotCooldownSec', 60, 7200);
+    num('revenueHotPct', 0.5, 50); num('bidUpliftPct', 0, 8); num('bandwidthGbPerHour', 0, 2);
+    num('hashWarmupMinutes', 1, 30); num('negativeExitMinutes', 1, 60); num('staleHashMinutes', 1, 30);
+    num('unknownCostMinutes', 1, 120); num('pausedDestroyMinutes', 1, 120);
     num('failoverMinutes', 2, 60);
+    if (patch.rentMode === 'interruptible' || patch.rentMode === 'ondemand') next.rentMode = patch.rentMode;
+    else if (patch.rentMode != null && patch.rentMode !== '') throw new Error('租用方式只能是 interruptible（可中断）或 ondemand（按需）');
     if (next.stopLossPct >= next.targetProfitPct) throw new Error('止损线必须低于目标收益率，否则会租了马上退');
     for (const k of ['poolUrl', 'image', 'minerArgs', 'proxy']) if (typeof patch[k] === 'string') next[k] = patch[k].trim();
     if (patch.launchMode === 'args' || patch.launchMode === 'ssh') next.launchMode = patch.launchMode;
@@ -1207,6 +1597,7 @@ export class Engine {
     }
     if (next.minerArgs && /[;&|`$<>\n]/.test(next.minerArgs)) throw new Error('矿工额外参数里不能有特殊符号');
     const changes = [];
+    if (next.rentMode !== this.cfg.rentMode) changes.push(next.rentMode === 'interruptible' ? '新租用改为可中断出价' : '新租用改为按需');
     if (next.autoRent !== this.cfg.autoRent) changes.push(next.autoRent ? '开启自动租用' : '关闭自动租用');
     if (next.autoDestroy !== this.cfg.autoDestroy) changes.push(next.autoDestroy ? '开启自动退租' : '关闭自动退租');
     if (next.runwayGuard !== this.cfg.runwayGuard) changes.push(next.runwayGuard ? `开启续航保护（${next.minRunwayHours} 小时）` : '关闭续航保护');
@@ -1240,7 +1631,8 @@ export class Engine {
   // ---------- 汇总 ----------
   summary(list = this.instances()) {
     const active = list.filter(x => x.status === 'running' || x.phase === 'booting' || x.status === 'loading');
-    const spendHr = active.reduce((a, x) => a + x.dph, 0);
+    const pausedStorage = list.filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted')).reduce((a, x) => a + (Number(x.storageHr) || 0), 0);
+    const spendHr = active.reduce((a, x) => a + x.dph, 0) + pausedStorage;
     // 有实测算力用实测；部署中 / 未匹配矿工的机器用预期算力（面板上标注「含预估」）
     const estimated = active.filter(x => !(x.avgHs > 0) && (x.phase === 'booting' || x.phase === 'unmatched'));
     const revenueHr = active.reduce((a, x) => a + (x.avgHs > 0 ? x.revenueHr : estimated.includes(x) ? x.expRevenueHr : 0), 0);

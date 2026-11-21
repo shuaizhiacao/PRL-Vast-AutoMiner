@@ -10,7 +10,17 @@ for (let i = 0; i < 60; i++) {
   const [name, th, base] = gpus[i % gpus.length];
   const n = i % 7 === 0 ? 2 : 1;
   const price = +(base * n * (0.62 + ((i * 37) % 60) / 100)).toFixed(3);
-  offers.push({ id: 10000 + i, machine_id: 5000 + i, gpu_name: name, num_gpus: n, dph_total: price, reliability2: 0.95 + (i % 5) / 100, geolocation: ['Tokyo, JP', 'Hong Kong, HK', 'Texas, US', 'Bavaria, DE', 'Guangdong, CN'][i % 5], inet_down: 300 + i * 10, cuda_max_good: 12.8 });
+  const storage_cost = 0.1; // $/GB/month
+  const diskHour = storage_cost * 10 / (30 * 24);
+  offers.push({
+    id: 10000 + i, machine_id: 5000 + i, gpu_name: name, num_gpus: n,
+    dph_base: price, dph_total: +(price + diskHour).toFixed(6),
+    min_bid: +Math.max(0.004, price * 0.62).toFixed(4),
+    storage_cost, inet_up_cost: 0.01, inet_down_cost: 0.01,
+    search: { gpuCostPerHour: price, diskHour, totalHour: price + diskHour },
+    flops_per_dphtotal: (th * n) / Math.max(price, 0.01),
+    reliability2: 0.95 + (i % 5) / 100, geolocation: ['Tokyo, JP', 'Hong Kong, HK', 'Texas, US', 'Bavaria, DE', 'Guangdong, CN'][i % 5], inet_down: 300 + i * 10, cuda_max_good: 12.8,
+  });
 }
 const instances = [{ id: 10000001, label: '', gpu_name: 'RTX 5080', num_gpus: 1, dph_total: 0.266, actual_status: 'running', intended_status: 'running', start_date: Date.now() / 1000 - 3600, geolocation: 'Guangdong, CN', machine_id: 100001, gpu_temp: 61 }];
 const born = {};
@@ -38,11 +48,17 @@ globalThis.fetch = async (url, opt = {}) => {
     if (opt.headers?.Authorization !== 'Bearer test-key') return json({ error: 'unauthorized', msg: 'bad key' }, 401);
     if (u.pathname === '/api/v0/users/current/') return json({ credit: 9.98 - sec() * 0.0003, email: 'demo@example.com' });
     if (u.pathname === '/api/v0/bundles/' && m === 'POST') {
-      if (!body.order || body.type !== 'on-demand') return json({ error: 'bad query' }, 400);
+      if (!body.order || (body.type !== 'on-demand' && body.type !== 'bid')) return json({ error: 'bad query' }, 400);
       globalThis.__lastLimit = body.limit;
-      if (globalThis.__rateLimited) { globalThis.__rateLimited = false; return json({ error: 'rate_limited', msg: 'API requests too frequent' }, 429); }
       globalThis.__lastQuery = body;
-      const list = offers.filter(o => o.dph_total <= body.dph_total.lte && (!body.gpu_name?.in || body.gpu_name.in.includes(o.gpu_name))).slice(0, body.limit || 1000);
+      globalThis.__queries = [...(globalThis.__queries || []), { type: body.type, order: body.order, limit: body.limit, names: body.gpu_name?.in || null, id: body.id?.eq ?? null }];
+      if (globalThis.__rateLimited) { globalThis.__rateLimited = false; return json({ error: 'rate_limited', msg: 'API requests too frequent' }, 429); }
+      let list = offers.filter(o => o.dph_total <= body.dph_total.lte && (!body.gpu_name?.in || body.gpu_name.in.includes(o.gpu_name)));
+      if (body.id?.eq != null) list = list.filter(o => o.id === body.id.eq || String(o.id) === String(body.id.eq));
+      const ord = body.order?.[0];
+      if (ord?.[0] === 'dph_total' && ord?.[1] === 'asc') list = [...list].sort((a, b) => a.dph_total - b.dph_total || a.id - b.id);
+      if (ord?.[0] === 'flops_per_dphtotal') list = [...list].sort((a, b) => (b.flops_per_dphtotal || 0) - (a.flops_per_dphtotal || 0));
+      list = list.slice(0, body.limit || 1000);
       if (globalThis.__quotaLeft != null) {
         if (globalThis.__quotaLeft <= 0) return json({ error: 'search_quota_exceeded', msg: 'Daily search row quota exhausted' }, 429, { 'X-RateLimit-Reset': String(Math.floor(globalThis.__quotaReset / 1000)) });
         globalThis.__quotaLeft -= list.length;

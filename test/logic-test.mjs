@@ -12,6 +12,7 @@ fs.writeFileSync('data/config.json', JSON.stringify({
   vastApiKey: 'test-key', wallet: 'prl1puauvt7txunf9zeu2qyrzv0pa5uvwjlq9a369s5wjpyxexjcypqddex7ac4',
   autoRent: true, autoDestroy: true, targetProfitPct: 30, stopLossPct: 0, maxInstances: 3, maxHourlySpend: 0.5,
   stopLossMinutes: 30, bootTimeoutMinutes: 20, minBalanceReserve: 1,
+  hashWarmupMinutes: 10, configVersion: 3,
 }));
 const { Engine } = await import(U('src/engine.js'));
 const MIN = 60000;
@@ -134,8 +135,9 @@ ok(e.nockBonus === 0, '关闭「计入 NOCK」开关后不计入');
 e.updateConfig({ includeNock: true, nockAddress: globalThis.__nockAddr });
 let captured = null;
 e.vast.rent = async (id, b) => { captured = b; return { success: true, new_contract: 999 }; };
-e.lastRentAt = 0; e.offers.forEach(o => (o.used = false));
-await e.rent(e.offers.find(o => o.autoOk), 'manual');
+await e.scan(true);
+e.lastRentAt = 0;
+await e.rent(e.offers.find(o => o.autoOk && o.rentable), 'manual');
 ok(captured.onstart.includes('--user prl1puauvt7txunf9zeu2qyrzv0pa5uvwjlq9a369s5wjpyxexjcypqddex7ac4@nock=' + globalThis.__nockAddr), '新租机器的矿池用户名带 @nock=地址');
 try { e.updateConfig({ nockAddress: 'abc0OIl' }); ok(false, '错误 NOCK 地址应被拒绝'); } catch { ok(true, '错误格式的 NOCK 地址被拒绝'); }
 const snap = e.snapshot();
@@ -297,7 +299,9 @@ ok(snap.market.nockPerThDay > 0 && snap.account.nockPending === 0.0295, `面板�
   // 租用时按地区选择
   let cap = null; e5.vast.rent = async (oid, b) => { cap = b; return { success: true, new_contract: 9600 }; };
   e5.lastRentAt = 0;
-  await e5.rent({ ...e5.offers[0], geolocation: 'Guangdong, CN', used: false }, 'manual');
+  await e5.scan(true);
+  const freshCn = e5.offers.find(o => o.rentable && !Object.values(e5.st.managed).some(m => m.offerId === o.id));
+  await e5.rent({ ...freshCn, geolocation: 'Guangdong, CN', used: false }, 'manual');
   ok(/wr\) F=wildrig-multi; URLS="https:\/\/ghfast/.test(cap.onstart), '「Guangdong, CN」被识别为国内机器');
 }
 
@@ -358,7 +362,7 @@ ok(snap.market.nockPerThDay > 0 && snap.account.nockPending === 0.0295, `面板�
   fs2.writeFileSync(cfgPath, JSON.stringify({ ...saved, minInetDown: 20, scanIntervalSec: 600, configVersion: undefined }));
   const S2 = await import(U('src/store.js') + '?v=' + Date.now());
   const c2 = S2.loadConfig();
-  ok(c2.minInetDown === 200 && c2.scanIntervalSec === 600 && c2.configVersion === 2, '配置升级：带宽仍是旧默认 20 → 升到 200；扫描间隔用户改过（600）保持不变');
+  ok(c2.minInetDown === 200 && c2.scanIntervalSec === 600 && c2.configVersion === 3, '配置升级：带宽仍是旧默认 20 → 升到 200；扫描间隔用户改过（600）保持不变；版本记到 3');
 }
 
 // ---- 回归：今早 RTX 3080 Ti 租下 4 分钟就被判「掉线 10 分钟」误杀
@@ -483,6 +487,134 @@ ok(snap.market.nockPerThDay > 0 && snap.account.nockPending === 0.0295, `面板�
   await e9.fetchLogs('8888');
   ok(/ghfast/.test(e9.logHint('8888')), `没有报错时显示最后一步进度（${e9.logHint('8888')}）`);
   globalThis.__logText = undefined;
+}
+
+// ---- P0：经济学排序、出价上限、热扫描、利润底线、抢占、重复下单
+{
+  const Econ = await import(U('src/economics.js'));
+  const cheap = { id: 'a', thPerDollar: 900, roi: 40, dph: 0.05 };
+  const priceyFlops = { id: 'b', thPerDollar: 80, roi: 5, dph: 3 };
+  const ranked = Econ.rankByHashPerDollar([priceyFlops, cheap]);
+  ok(ranked[0].id === 'a' && ranked[1].id === 'b', '跨型号按算力/美元排序，不按 FLOPS');
+  const probes = Econ.modelProbePlan({
+    modelNames: Array.from({ length: 10 }, (_, i) => ({ key: 'G' + i, names: ['G' + i] })),
+    scanRows: 20, maxProbes: 8, cursor: 0,
+  });
+  ok(probes.probes.length === 8 && probes.probes.every(p => p.limit === 2) && probes.nextCursor === 8, '一轮只取 8 个型号、每个型号 2 条最低价，条数预算约 20');
+  const probes2 = Econ.modelProbePlan({
+    modelNames: Array.from({ length: 10 }, (_, i) => ({ key: 'G' + i, names: ['G' + i] })),
+    scanRows: 20, maxProbes: 8, cursor: probes.nextCursor,
+  });
+  ok(probes2.probes[0].key === 'G8' && probes2.probes.some(p => p.key === 'G9'), '下一轮从上一轮没排到的型号继续，不会永远只搜前几个');
+  const bid = Econ.planBid({ minBid: 0.1, storageHr: 0.01, bandwidthHr: 0.001, revenueHr: 0.2, targetProfitPct: 30, upliftPct: 3, budgetHr: 1 });
+  ok(bid.ok && Math.abs(bid.bid - 0.103) < 1e-9 && bid.bid <= bid.maxBid, `3% 上浮后出价 $${bid.bid}，不超过经济上限 $${bid.maxBid?.toFixed?.(4)}`);
+  const capped = Econ.planBid({ minBid: 0.1, storageHr: 0.01, bandwidthHr: 0, revenueHr: 0.15, targetProfitPct: 30, upliftPct: 5, budgetHr: 0.12 });
+  ok(capped.ok && capped.bid <= capped.cap + 1e-9 && capped.bid >= 0.1 && capped.roi + 1e-6 >= 30, `预算比上浮价更紧时，出价停在上限 $${capped.bid}（收益率 ${capped.roi?.toFixed?.(1)}%）`);
+  const tooDear = Econ.planBid({ minBid: 0.2, storageHr: 0.01, bandwidthHr: 0, revenueHr: 0.15, targetProfitPct: 30, upliftPct: 3, budgetHr: 1 });
+  ok(!tooDear.ok, '最低出价已经高于经济上限时拒绝，而不是加价硬租');
+  const bad = Econ.quoteOffer({ min_bid: 'nope', storage_cost: 0.1 }, { disk: 10, targetProfitPct: 30, bidUpliftPct: 3, bandwidthGbPerHour: 0 }, { revenuePerHsHour: 1e-15, hashrateHs: 1e14, mode: 'interruptible' });
+  ok(!bad.ok, 'min_bid 不是数字时失败关闭');
+  const stale = Econ.quoteOffer({ min_bid: 0.05, storage_cost: 0.1 }, { disk: 10, targetProfitPct: 30, bidUpliftPct: 3, bandwidthGbPerHour: 0 }, { revenuePerHsHour: 0, hashrateHs: 1e14, mode: 'interruptible' });
+  ok(!stale.ok, '收益价缺失或为 0 时失败关闭');
+  const floorIn = { floorPct: 12, costKnown: true, costHr: 0.2, marketFresh: true, expectedRoi: 40, sustainedRoi: 8, sinceHashMin: 2, warmupMin: 4, belowForMin: 0, persistMin: 12, negForMin: 0, negExitMin: 5, samplesOk: true, wasBelow: false, unknownForMin: 0, unknownExitMin: 15 };
+  const floorHold = Econ.profitFloorDecision(floorIn);
+  ok(floorHold.action === 'warmup', '预热期内即使低于 12% 底线也不退出');
+  const floorArm = Econ.profitFloorDecision({ ...floorIn, sinceHashMin: 6 });
+  ok(floorArm.action === 'arm-floor', '预热结束后，8% 低于 12% 底线，开始计时而不是当成允许的亏损');
+  const floorExit = Econ.profitFloorDecision({ ...floorIn, sinceHashMin: 6, belowForMin: 12, wasBelow: true });
+  ok(floorExit.action === 'exit' && floorExit.path === 'floor', '低于底线持续 12 分钟后退出');
+  const neg = Econ.profitFloorDecision({ ...floorIn, expectedRoi: -5, sustainedRoi: null, samplesOk: false, sinceHashMin: 1, negForMin: 5 });
+  ok(neg.action === 'exit' && neg.path === 'negative', '保守满算力仍然亏钱时，预热没结束也会在短计时后退出');
+  const drop = Econ.hotDecision({ fresh: true, usd: 1, prevUsd: 1.2, roomToRent: true, qualifyingFresh: 0, now: 10, coolUntil: 0, upPct: 3, badMarket: false });
+  ok(!drop.arm && /下降/.test(drop.why), '收益下降不打开热扫描');
+  const up = Econ.hotDecision({ fresh: true, usd: 1.2, prevUsd: 1, roomToRent: true, qualifyingFresh: 0, now: 10, coolUntil: 0, upPct: 3, badMarket: false });
+  ok(up.arm, '收益上升且还有租用空间才打开热扫描');
+  const full = Econ.hotDecision({ ...up, roomToRent: false, usd: 1.2, prevUsd: 1 });
+  ok(!full.arm, '没有租用空间时不因涨价加速');
+  const qual = Econ.hotDecision({ fresh: true, usd: 1, prevUsd: 1, roomToRent: true, qualifyingFresh: 2, now: 10, coolUntil: 0, upPct: 3 });
+  ok(qual.arm && /达标/.test(qual.why), '新出现达标报价可以打开有限热窗口');
+  const cool = Econ.hotDecision({ ...qual, coolUntil: 20, now: 10 });
+  ok(!cool.arm, '冷却期内不能再次打开热扫描');
+  const badMkt = Econ.hotDecision({ ...qual, fresh: false, qualifyingFresh: 3 });
+  ok(!badMkt.arm, '行情不新鲜时不打开热扫描');
+  const pace = Econ.resolveScanInterval({ baseMs: 600_000, fastMs: 45_000, hotActive: true, quotaPaceMs: 600_000 });
+  ok(pace.why === 'quota-blocks-hot' && pace.interval === 600_000, '额度只够 10 分钟一次时，热扫描不能改成 45 秒');
+  const fast = Econ.resolveScanInterval({ baseMs: 600_000, fastMs: 45_000, hotActive: true, quotaPaceMs: null });
+  ok(fast.why === 'hot' && fast.interval === 45_000, '额度宽裕时热扫描用 45 秒，慢扫描基线仍是 600 秒');
+}
+
+{
+  const eP = new Engine();
+  eP.log = () => {};
+  eP.updateConfig({ autoRent: false, targetProfitPct: 30, maxHourlySpend: 5, maxInstances: 5 });
+  await eP.refreshMarket();
+  eP.evaluateOffers([
+    { id: 1, machine_id: 1, gpu_name: 'H100 SXM', num_gpus: 8, dph_total: 20, dph_base: 19, min_bid: 12, storage_cost: 0.1, inet_up_cost: 0, inet_down_cost: 0, search: { gpuCostPerHour: 19, diskHour: 0.02 }, reliability2: 0.99, flops_per_dphtotal: 99999, geolocation: 'Texas, US', inet_down: 1000, cuda_max_good: 12.8 },
+    { id: 2, machine_id: 2, gpu_name: 'RTX 4070S', num_gpus: 1, dph_total: 0.2, dph_base: 0.19, min_bid: 0.05, storage_cost: 0.1, inet_up_cost: 0, inet_down_cost: 0, search: { gpuCostPerHour: 0.19, diskHour: 0.001 }, reliability2: 0.99, flops_per_dphtotal: 1, geolocation: 'Tokyo, JP', inet_down: 800, cuda_max_good: 12.6 },
+    { id: 3, machine_id: 3, gpu_name: 'RTX 3060', num_gpus: 1, dph_total: 0.08, dph_base: 0.07, min_bid: 0.03, storage_cost: 0.1, inet_up_cost: 0, inet_down_cost: 0, search: { diskHour: 0.001 }, reliability2: 0.99, flops_per_dphtotal: 3, geolocation: 'Texas, US', inet_down: 500, cuda_max_good: 12.4 },
+  ]);
+  ok(eP.offers[0].gpuName.includes('4070') || eP.offers[0].thPerDollar >= eP.offers.find(o => /3060/.test(o.gpuName)).thPerDollar, `便宜的 4070S 按算力/美元排在前面（第一名 ${eP.offers[0].gpuName}）`);
+  ok(eP.offers.some(o => /4070/.test(o.gpuName)) && eP.offers.some(o => /3060/.test(o.gpuName)), '低 FLOPS 的便宜型号没有被高 FLOPS 机器挤掉');
+  const vast = await import(U('src/vast.js'));
+  const body = vast.searchBody({ ...eP.cfg, rentMode: 'interruptible', minReliability: 0.95, maxGpusPerMachine: 8, maxHourlySpend: 2, minCuda: 12.4, minInetDown: 200, scanRows: 20, disk: 10 }, ['RTX 4070S'], { limit: 2 });
+  ok(body.type === 'bid' && body.order[0][0] === 'dph_total' && body.order[0][1] === 'asc' && !JSON.stringify(body.order).includes('flops'), '可中断搜索用 type=bid，按 dph_total 从低到高，不用 FLOPS');
+  const ondemand = vast.searchBody({ ...eP.cfg, rentMode: 'ondemand' }, null, {});
+  ok(ondemand.type === 'on-demand' && ondemand.limit === 20, '按需模式显式使用 type=on-demand，默认一页 20 条');
+
+  // 抢占：不拉黑主机，销毁以免存储一直计费
+  const now = Date.now();
+  eP.rawInstances = [{ id: 4242, label: 'prl-auto-RTX4070S pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1, dph_total: 0.08, actual_status: 'exited', intended_status: 'stopped', status_msg: 'client bid too low', start_date: now / 1000 - 3600, machine_id: 77, storage_cost: 0.12 }];
+  eP.st.managed['4242'] = { rentedAt: now - 60 * MIN, gpuName: 'RTX 4070S', numGpus: 1, machineId: 77, rentMode: 'interruptible', hashAt: now - 30 * MIN };
+  eP.instancesOk = true;
+  let why = '';
+  eP.vast.destroy = async id => { why = id; return { success: true }; };
+  eP.st.managed['4242'].pausedSince = now - 4 * MIN;
+  await eP.autoDestroy(eP.instances());
+  ok(why === '4242' && !eP.st.blacklist[77], '抢占后销毁实例，且不把主机拉黑');
+
+  // 退租失败会保留记录，下次重试；已经不存在则当成退掉了
+  eP.rawInstances = [{ id: 4343, label: 'prl-auto-RTX4070S pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1, dph_total: 0.2, actual_status: 'running', intended_status: 'running', start_date: now / 1000 - 7200, machine_id: 78 }];
+  eP.st.managed['4343'] = { rentedAt: now - 120 * MIN, gpuName: 'RTX 4070S', numGpus: 1, machineId: 78, hashAt: now - 100 * MIN, belowSince: now - 30 * MIN };
+  eP.samples.set(4343, [0, 1, 2, 3, 4, 5].map(k => ({ t: now - (6 - k) * MIN, hs: 20e12 })));
+  eP.workers.set('v4343', { hs: 20e12, gpus: [{ name: 'RTX 4070S', hs: 20e12 }] });
+  eP.everHashed.add('4343');
+  eP.cfg.stopLossPct = 12; eP.cfg.stopLossMinutes = 12; eP.cfg.hashWarmupMinutes = 4;
+  let calls = 0;
+  eP.vast.destroy = async () => { calls++; const err = new Error('HTTP 500：暂时失败'); err.status = 500; throw err; };
+  let threw = false;
+  try { await eP.autoDestroy(eP.instances()); } catch { threw = true; }
+  ok(threw && eP.st.managed['4343'] && eP.st.managed['4343'].destroyFails === 1, '退租接口失败时保留实例，记下失败次数');
+  eP.vast.destroy = async () => { const err = new Error('HTTP 404：no such instance'); err.status = 404; throw err; };
+  await eP.autoDestroy(eP.instances());
+  ok(!eP.st.managed['4343'], 'vast 说实例已经不存在时，本地按已退租清掉，避免反复重试');
+
+  // 超时后不重复下单；如果实例其实已经出现，就认领而不再 PUT
+  await eP.refreshWildrig();
+  await eP.refreshVast();
+  const offer = eP.offers.find(o => o.rentable && o.autoOk);
+  eP.vast.searchOffers = async (_f, _meta, _names, extra) => {
+    if (String(extra?.id) !== String(offer.id)) return [];
+    return [{
+      id: offer.id, gpu_name: offer.gpuName, num_gpus: offer.numGpus, machine_id: offer.machineId,
+      min_bid: offer.minBid, dph_base: offer.minBid, dph_total: offer.dph, storage_cost: 0.1,
+      inet_up_cost: 0, inet_down_cost: 0, search: { diskHour: offer.storageHr, gpuCostPerHour: offer.minBid },
+      reliability2: 0.99, geolocation: offer.geolocation || 'Tokyo, JP', inet_down: 800, cuda_max_good: 12.6,
+    }];
+  };
+  eP.offers.forEach(o => { o.used = false; });
+  eP.lastRentAt = 0;
+  let puts = 0;
+  eP.vast.rent = async () => { puts++; const err = new Error('网络错误：超时(60s)'); err.status = 0; throw err; };
+  let unknown = false;
+  try { await eP.rent(offer, 'manual'); } catch (err) { unknown = !!err.unknown; }
+  ok(unknown && puts === 1 && eP.st.pendingOrders[String(offer.id)]?.state === 'unknown', '下单超时记为结果未知，不拉黑主机');
+  puts = 0;
+  try { await eP.rent(offer, 'manual'); } catch { /* 锁定 */ }
+  ok(puts === 0, '结果未知的 10 分钟内不会对同一报价再 PUT');
+  const token = eP.st.pendingOrders[String(offer.id)].token;
+  eP.rawInstances.push({ id: 5150, label: `prl-auto-x tok=${token} pool=pearlhash`, gpu_name: offer.gpuName, num_gpus: offer.numGpus, dph_total: offer.dph, actual_status: 'loading', intended_status: 'running', machine_id: offer.machineId, start_date: Date.now() / 1000 });
+  await eP.reconcilePending();
+  ok(eP.st.managed['5150'] && !eP.st.pendingOrders[String(offer.id)], '超时之后如果实例已经在列表里，就认领它，不再下第二单');
 }
 
 console.log(`\n${pass} 通过，${fail} 失败`);

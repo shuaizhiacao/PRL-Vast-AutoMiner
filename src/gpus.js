@@ -51,6 +51,19 @@ export function gpuKey(raw) {
   return s;
 }
 
+// vast 的 gpu_name 要原样匹配。表里的展示名和常见写法都拿去搜，
+// 再并上从搜索结果里学到的别名。不把搜索范围收成某几个型号。
+export function searchNamesFor(g, learned = []) {
+  const out = [];
+  const add = n => { if (n && !out.includes(n)) out.push(n); };
+  if (!g) return out;
+  add(g.name);
+  add(String(g.name).replace(/ Super/g, 'S'));
+  add(String(g.name).replace(' Ti Super', 'S Ti'));
+  for (const n of learned) add(n);
+  return out;
+}
+
 export function hashrateTable(calib = {}) {
   return BASE_HASHRATES.map(g => {
     const c = calib[g.key];

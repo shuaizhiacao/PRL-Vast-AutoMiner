@@ -1,6 +1,6 @@
 {
   "name": "prl-vast-autominer",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "vast.ai 自动租显卡挖 Pearl (PRL)：按利润率自动租用部署、实时收益监控、多矿池（Pearlhash / Kryptex）切换的本地网页控制台",
   "type": "module",
   "main": "server.js",

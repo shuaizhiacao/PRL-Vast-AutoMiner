@@ -1,10 +1,14 @@
 // vast.ai REST API（按官方文档 docs.vast.ai 与官方 vast-cli 源码实现）
-//   搜索:   POST   /api/v0/bundles/
+//   搜索:   POST   /api/v0/bundles/     type: "on-demand" | "bid" | "reserved"
 //   租用:   PUT    /api/v0/asks/{offer_id}/
+//            price 省略或 null = 按需；price 为美元/小时 = 可中断出价（低于 min_bid 会被拒绝）
 //   实例:   GET    /api/v1/instances/（分页，每页最多 25 台；旧的 /api/v0/instances/ 列表接口已被 vast 停用，返回 410）
 //   销毁:   DELETE /api/v0/instances/{id}/
 //   余额:   GET    /api/v0/users/current   (字段 credit)
+// 搜索排序用 dph_total 升序（该型号最便宜的几条），不用 flops_per_dphtotal。
+// FLOPS/$ 和卡数不成比例，会把挖矿划算但 FLOPS 不高的型号挤出有限的返回条数。
 import { request } from './http.js';
+import { rentModeOf, vastSearchType } from './economics.js';
 
 const ROOT = 'https://console.vast.ai';
 const BASE = `${ROOT}/api/v0`;
@@ -43,25 +47,12 @@ export class Vast {
   }
 
   // 与官方 CLI search_offers 的默认过滤一致：verified / external=false / rentable / rented=false
-  // vast 按「返回的条数」计每日搜索额度（UTC 0 点重置），所以只取每美元算力最高的前 N 条
-  // names：只搜这些型号（vast 的 gpu_name 原样字符串），省掉不适合挖矿的卡占用的搜索条数
-  async searchOffers(f, meta, names) {
-    const q = {
-      verified: { eq: true },
-      external: { eq: false },
-      rentable: { eq: true },
-      rented: { eq: false },
-      reliability: { gte: f.minReliability },
-      num_gpus: { gte: 1, lte: f.maxGpusPerMachine },
-      dph_total: { lte: Math.max(0.01, f.maxHourlySpend) }, // 单机时租不可能超过总预算
-      cuda_max_good: { gte: f.minCuda },
-      inet_down: { gte: f.minInetDown },
-      order: [['flops_per_dphtotal', 'desc']],
-      type: 'on-demand',
-      limit: Math.max(20, Math.min(1000, f.scanRows || 100)),
-      allocated_storage: f.disk,
-      ...(names?.length ? { gpu_name: { in: names } } : {}),
-    };
+  // vast 按「返回的条数」计每日搜索额度（UTC 0 点重置）。
+  // names：只搜这些型号（vast 的 gpu_name 原样字符串）。
+  // extra.limit：这一次请求的条数（按型号取最便宜的几条）。extra.id：下单前按 offer id 复核。
+  // extra.order 默认 dph_total 升序。不要改回 flops_per_dphtotal。
+  async searchOffers(f, meta, names, extra = {}) {
+    const q = searchBody(f, names, extra);
     const r = await request(`${BASE}/bundles/`, { method: 'POST', headers: this.h(), body: q, timeoutMs: 45000, meta });
     return r?.offers || [];
   }
@@ -69,12 +60,14 @@ export class Vast {
   // 租用一个 offer 并部署。cancel_unavail=true：机器已被别人租走时直接失败，不会留下排队中的实例
   // mode 'args'：跳过 vast 的 SSH 初始化（apt 装 ssh/tmux 等，慢机器要好几分钟），容器直接用 bash 运行开机脚本
   // mode 'ssh'：原来的方式，能 SSH / Jupyter 登录，脚本作为 onstart 运行
-  async rent(offerId, { image, disk, label, onstart, mode = 'ssh' }) {
+  // price：可中断出价（美元/小时）。按需必须传 null，不能省略成一个数字，否则 vast 会按出价单创建。
+  async rent(offerId, { image, disk, label, onstart, mode = 'ssh', price = null }) {
+    if (price != null && !(Number.isFinite(price) && price > 0)) throw new Error('出价无效');
     const body = {
       client_id: 'me',
       image,
       env: {},
-      price: null,
+      price,
       disk,
       label,
       cancel_unavail: true,
@@ -114,4 +107,26 @@ export class Vast {
   async destroy(id) {
     return request(`${BASE}/instances/${id}/`, { method: 'DELETE', headers: this.h(), body: {}, timeoutMs: 30000 });
   }
+}
+
+export function searchBody(f, names, extra = {}) {
+  const limit = Math.max(1, Math.min(200, extra.limit || f.scanRows || 20));
+  const q = {
+    verified: { eq: true },
+    external: { eq: false },
+    rentable: { eq: true },
+    rented: { eq: false },
+    reliability: { gte: f.minReliability },
+    num_gpus: { gte: 1, lte: f.maxGpusPerMachine },
+    dph_total: { lte: Math.max(0.01, f.maxHourlySpend) }, // 单机时租不可能超过总预算
+    cuda_max_good: { gte: f.minCuda },
+    inet_down: { gte: f.minInetDown },
+    order: extra.order || [['dph_total', 'asc']],
+    type: extra.type || vastSearchType(rentModeOf(f)),
+    limit,
+    allocated_storage: f.disk,
+    ...(names?.length ? { gpu_name: { in: names.slice(0, 64) } } : {}),
+  };
+  if (extra.id != null) q.id = { eq: extra.id };
+  return q;
 }

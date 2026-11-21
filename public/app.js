@@ -145,7 +145,7 @@ function render() {
   else if (c.autoRent && pre.length) banner = `<div class="banner">自动租用已开启，但暂时不会下单：${esc(pre.join('、'))}</div>`;
   else if (s.roi != null && s.roi < c.stopLossPct) {
     const hasManual = S.instances.some(x => !x.managed && x.phase === 'loss');
-    banner = `<div class="banner bad">当前综合收益率 <b>${pct(s.roi)}</b> 低于止损线 ${c.stopLossPct}%。本程序租的亏损机器会在持续 ${c.stopLossMinutes} 分钟后${c.autoDestroy ? '自动退租' : '提醒（自动退租已关闭）'}${hasManual ? '；手动租的亏损机器不会自动退，需要你自己决定' : ''}。</div>`;
+    banner = `<div class="banner bad">当前综合收益率 <b>${pct(s.roi)}</b> 低于利润底线 ${c.stopLossPct}%（低于这个数就退出，正数不是允许的亏损）。本程序租的机器会在持续 ${c.stopLossMinutes} 分钟后${c.autoDestroy ? '自动退租' : '提醒（自动退租已关闭）'}${hasManual ? '；手动租的机器不会自动退' : ''}。</div>`;
   }
   $('#banner').innerHTML = banner;
 
@@ -177,7 +177,7 @@ function render() {
     <div><span>总算力 · 10 分钟</span><b>${hs(s.totalHs)}</b><small>${num(s.prlPerDay, 1)} PRL / 天</small></div>
     <div><span>每小时成本</span><b>${usd(s.spendHr, 3)}</b><small>${S.budget.spendCapByRunway != null && S.budget.spendCapByRunway < c.maxHourlySpend ? `续航上限 ${usd(S.budget.spendCapByRunway, 2)}` : `上限 ${usd(c.maxHourlySpend, 2)}${c.runwayGuard ? '' : ' · 续航保护关'}`}</small></div>
     <div><span>每小时收益</span><b>${usd(s.revenueHr, 3)}</b><small>${s.estimatedCount ? `含 ${s.estimatedCount} 台预估` : '全部实测'}</small></div>
-    <div class="tm-roi"><span>综合收益率</span><b class="${clsRoi(s.roi)}">${pct(s.roi)}</b><small>目标 ${c.targetProfitPct}% · 止损 ${c.stopLossPct}%</small></div>
+    <div class="tm-roi"><span>综合收益率</span><b class="${clsRoi(s.roi)}">${pct(s.roi)}</b><small>目标 ${c.targetProfitPct}% · 底线 ${c.stopLossPct}%</small></div>
     <div><span>每日净利</span><b class="${s.profitHr >= 0 ? 'up' : 'down'}">${usd(s.profitHr * 24)}</b><small>${usd(s.profitHr, 3)} / 小时</small></div>
     ${(() => { const kx = (S.pools || []).find(p => p.id === 'kryptex' && p.configured); const kb = kx?.pending?.prl ?? 0;
       return `<div><span>矿池待结算</span><b>${num((a.prlPending || 0) + kb, 3)}<span class="dim" style="display:inline;font-size:11px"> PRL</span></b><small>${kx ? `PH ${num(a.prlPending, 2)} · KX ${num(kb, 2)}` : `${num(a.nockPending, 3)} NOCK`}</small></div>`; })()}`;
@@ -189,7 +189,7 @@ function render() {
   renderLog();
 }
 
-const PHASE = { mining: '挖矿中', booting: '部署中', restarting: '重启中', switching: '切换矿池', unmatched: '未匹配', nohash: '无算力', loss: '低于止损', offline: '离线', stopped: '已停止' };
+const PHASE = { mining: '挖矿中', booting: '部署中', restarting: '重启中', switching: '切换矿池', unmatched: '未匹配', nohash: '无算力', loss: '低于底线', offline: '离线', stopped: '已停止', preempted: '已抢占' };
 const HEALTH = { low: '算力偏低', gpu: '显卡异常' };
 const isAbnormal = x => ['low', 'gpu'].includes(x.health) || ['nohash', 'offline'].includes(x.phase);
 
@@ -274,7 +274,8 @@ function renderCards() {
       : ['', '暂无实测算力，收益率为预估值']);
     if (x.failoverFrom && !x.switching) notes.push(['warn', `${pn(x.failoverFrom)} 故障时自动转到这里，恢复后会自动切回`]);
     if (x.pool !== x.wantPool && !x.switching && x.phase !== 'booting') notes.push(['warn', `标签要求挖 ${pn(x.wantPool)}，但矿池数据显示它在 ${pn(x.pool)} 出算力`]);
-    if (x.belowSince) notes.push(['warn', `跌破止损已 ${dur((Date.now() - x.belowSince) / 60000)}，满 ${S.config.stopLossMinutes} 分钟${x.managed ? '将自动退租' : '（手动机器不会自动退）'}`]);
+    if (x.phase === 'preempted' || x.phase === 'stopped') notes.push(['warn', x.phase === 'preempted' ? '可中断实例已暂停，即将销毁以停止存储计费' : '实例已停止，存储可能仍在计费，即将销毁']);
+    if (x.belowSince) notes.push(['warn', `低于利润底线已 ${dur((Date.now() - x.belowSince) / 60000)}，满 ${S.config.stopLossMinutes} 分钟${x.managed ? '将自动退租' : '（手动机器不会自动退）'}`]);
     const healthPill = x.health && x.health !== 'ok' ? `<span class="status-tag hbad">${HEALTH[x.health]}</span>` : '';
     const ratio = x.hashRatio;
     return `<div class="rig ${x.phase} ${ab ? 'abnormal' : ''}">
@@ -463,7 +464,7 @@ function renderOffers() {
   tb.innerHTML = rows.map(o => `<tr class="${o.roi >= t ? 'good' : ''} ${o.blacklisted ? 'dim' : ''}">
     <td>${o.numGpus}× ${esc(o.gpuName)}${o.source === '实测' ? '<span class="tag real">实测</span>' : o.source === '估算' ? '<span class="tag est">估算</span>' : ''}${o.blacklisted ? `<span class="tag bl">${esc(o.blacklisted)}</span>` : ''}</td>
     <td class="r">${num(o.th, 0)} TH</td>
-    <td class="r">${usd(o.dph, 3)}</td>
+    <td class="r">${usd(o.dph, 3)}${o.rentMode === 'interruptible' ? `<div class="dim">出价 ${o.bid != null ? usd(o.bid, 3) : '—'}</div>` : '<div class="dim">按需</div>'}</td>
     <td class="r">${usd(o.revenueHr, 3)}</td>
     <td><div class="roi-cell"><span class="${clsRoi(o.roi)}">${pct(o.roi)}</span>${roiBar(o.roi)}</div></td>
     <td class="r">${num(o.thPer01, 0)}</td>
@@ -531,7 +532,8 @@ async function toggle(key, val) {
 $('#swRent').addEventListener('change', async e => {
   const v = e.target.checked;
   if (v) {
-    const ok = await confirmBox('开启自动租用', `程序会自动租下收益率 ≥ <b>${S.config.targetProfitPct}%</b> 的机器并部署挖矿，最多 <b>${S.config.maxInstances}</b> 台、每小时最多花 <b>${usd(S.config.maxHourlySpend)}</b>。<br>会真实扣除 vast 余额，确定开启？`);
+    const mode = S.config.rentMode === 'ondemand' ? '按需' : '可中断出价';
+    const ok = await confirmBox('开启自动租用', `程序会自动租下收益率 ≥ <b>${S.config.targetProfitPct}%</b> 的机器并部署挖矿（当前是<b>${mode}</b>），最多 <b>${S.config.maxInstances}</b> 台、每小时最多花 <b>${usd(S.config.maxHourlySpend)}</b>。<br>会真实扣除 vast 余额。可中断实例被抢占后会停机，但存储可能继续计费，程序会把这种暂停销毁掉。<br>信用卡购买的 vast 余额不能用于挖矿。确定开启？`);
     if (!ok) { e.target.checked = false; return; }
   }
   toggle('autoRent', v);
@@ -547,7 +549,8 @@ $('#btnScan').addEventListener('click', async () => {
 window.rent = async id => {
   const o = S.offers.find(x => x.id === id);
   if (!o) return;
-  const ok = await confirmBox('手动租用', `${o.numGpus}× ${esc(o.gpuName)}（${flag(o.geolocation)}）<br>时租 <b>${usd(o.dph, 3)}</b> · 预计收益率 <b>${pct(o.roi)}</b><br>租下后会自动部署挖矿，确定？`);
+  const kind = o.rentMode === 'interruptible' ? `可中断，出价 ${usd(o.bid, 4)}/h` : '按需';
+  const ok = await confirmBox('手动租用', `${o.numGpus}× ${esc(o.gpuName)}（${flag(o.geolocation)}）<br>${kind} · 合计 <b>${usd(o.dph, 3)}/h</b> · 预计收益率 <b>${pct(o.roi)}</b><br>下单前会用最新行情再核一次。租下后会自动部署挖矿，确定？`);
   if (!ok) return;
   try { const r = await api('/api/rent/' + id, {}); toast('租用成功，实例 ' + r.id + '，正在部署'); } catch (e) { toast('租用失败：' + e.message, true); }
   refresh();
