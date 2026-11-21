@@ -484,7 +484,9 @@ export class Engine {
     return this.rawInstances.map(i => {
       const id = String(i.id);
       const m = this.st.managed[id];
-      const managed = !!m || String(i.label || '').startsWith(LABEL);
+      const orderTok = (String(i.label || '').match(/\btok=([A-Za-z0-9]+)/) || [])[1];
+      // 只认账本，或本程序发出且仍记得的下单标签。别人的实例即使写了相近前缀也不算。
+      const managed = !!m || this.tokenIsOurs(orderTok);
       const ref = this.thFor(i.gpu_name);
       const numGpus = i.num_gpus || 1;
       // 预期算力用最新的参考值（租过的型号会被实测值替换），比租用时记下的更准
@@ -510,13 +512,14 @@ export class Engine {
       const firstHashAt = arr.find(s => s.hs > 0 && s.t > resetAt)?.t ?? null;
       // 本程序租的机器：用下单时的出价/按需算力价 + 当前存储 + 流量上限。
       // 可中断实例上的 dph_total 是按需总价，不能拿来当实际时租，缺数字时也不能当成 0。
-      // 带本程序下单标签、却对不上记下的费用时，不用按需 dph_total 冒充。费用未知只停住，不按亏损退租。
-      const orderTok = (String(i.label || '').match(/\btok=([A-Za-z0-9]+)/) || [])[1];
-      const quote = m
-        ? managedRunningCost(i, m, this.cfg)
-        : (orderTok
-          ? { ok: false, dph: null, storageHr: null }
-          : (finiteNum(i.dph_total) > 0 ? { ok: true, dph: Number(i.dph_total), storageHr: storageHourly(i, this.cfg.disk).hr } : { ok: false, dph: null, storageHr: null }));
+      // 对得上身份、对不上出价时，费用未知。不用按需 dph_total 冒充，也不当成 0。
+      const quote = (m?.restoredWithoutPrice)
+        ? { ok: false, dph: null, storageHr: null }
+        : (m
+          ? managedRunningCost(i, m, this.cfg)
+          : (this.tokenIsOurs(orderTok)
+            ? { ok: false, dph: null, storageHr: null }
+            : (finiteNum(i.dph_total) > 0 ? { ok: true, dph: Number(i.dph_total), storageHr: storageHourly(i, this.cfg.disk).hr } : { ok: false, dph: null, storageHr: null })));
       const dph = quote.ok ? quote.dph : null;
       const costKnown = !!quote.ok;
       const startedAt = (m?.rentedAt) || (i.start_date ? i.start_date * 1000 : now);
@@ -1003,7 +1006,9 @@ export class Engine {
         const zeros = arr.filter(s => s.t >= (zeroSince ?? now));
         // 连续为 0 的时间真的超过 10 分钟，且这段时间里至少采到 10 个样本（避免程序刚启动/断网恢复时误判）
         if (zeroSince && now - zeroSince >= 10 * MIN && zeros.length >= 10 && zeros.every(s => s.hs === 0)) {
-          await this.destroy(x.id, x.restartAt ? `重启后 ${this.cfg.bootTimeoutMinutes} 分钟仍无算力` : '矿工掉线超过 10 分钟', 6 * 60);
+          const churn = m.rentMode === 'interruptible';
+          const why = x.restartAt ? `重启后 ${this.cfg.bootTimeoutMinutes} 分钟仍无算力` : (churn ? '可中断实例矿工掉线超过 10 分钟（销毁以停止计费，不拉黑主机）' : '矿工掉线超过 10 分钟');
+          await this.destroy(x.id, why, churn ? 0 : 6 * 60);
           return;
         }
       }
@@ -1014,7 +1019,11 @@ export class Engine {
         if (stats.stale && stats.newestAgeMs < Infinity) {
           if (!m.staleSince) { m.staleSince = now; this.save(); }
           if (now - m.staleSince >= this.cfg.stopLossMinutes * MIN) {
-            await this.destroy(x.id, `算力样本过期超过 ${this.cfg.stopLossMinutes} 分钟`, 6 * 60);
+            const churn = m.rentMode === 'interruptible';
+            const why = churn
+              ? `可中断实例算力样本过期超过 ${this.cfg.stopLossMinutes} 分钟（销毁以停止计费，不拉黑主机）`
+              : `算力样本过期超过 ${this.cfg.stopLossMinutes} 分钟`;
+            await this.destroy(x.id, why, churn ? 0 : 6 * 60);
             return;
           }
         } else if (m.staleSince) { delete m.staleSince; this.save(); }
@@ -1060,8 +1069,8 @@ export class Engine {
     }
     if (d.action === 'exit') {
       const shown = Number.isFinite(x.roi) ? `近期收益率 ${x.roi.toFixed(1)}%` : '没有可靠的持续收益率';
-      const bl = d.path === 'unknown-cost' ? 60 : 60;
-      await this.destroy(x.id, `${d.reason}（${shown}，底线 ${this.cfg.stopLossPct}%）`, bl);
+      const churn = m.rentMode === 'interruptible';
+      await this.destroy(x.id, `${d.reason}（${shown}，底线 ${this.cfg.stopLossPct}%）${churn ? '；可中断实例不拉黑主机' : ''}`, churn ? 0 : 60);
       return;
     }
     if (d.action === 'arm-floor') {
@@ -1105,7 +1114,14 @@ export class Engine {
 
   // 只跳过「这一笔订单已经认领」的预留，不因旧机器用过同一个 offer 编号就把新订单藏起来。
   sameOrderAdopted(p) {
-    return !!(p?.token && this.adoptedTokens().has(String(p.token)));
+    if (!p?.token) return false;
+    const t = String(p.token);
+    if (this.adoptedTokens().has(t)) return true;
+    // 列表里已经有同一标签时，这台就是这笔订单，预留不再另计一台。
+    return (this.rawInstances || []).some(i => {
+      const tok = (String(i.label || '').match(/\btok=([A-Za-z0-9]+)/) || [])[1];
+      return tok === t;
+    });
   }
 
   // 只统计还没被实例列表确认的下单预留。已回包的 managed 记录另计为实际占用，这里不加。
@@ -1198,12 +1214,14 @@ export class Engine {
     const extra = this.committedUnlisted(list, ignoreOffer);
     const spend = active.reduce((a, x) => a + hourly(x), 0) + this.reservedSpend(ignoreOffer) + extra.spend;
     // 费用缺失的已租机器，或结果未知的未完成下单，不能按 0 元放进预算。
-    const costUnknown = active.some(x => x.ledger && x.costKnown === false) || extra.unknown > 0 || this.pendingCostUnknown(ignoreOffer);
-    // 停止/被抢占的实例不再占 GPU，但存储还在计费，占用每小时预算。
+    // 认得出是我们的、但费用未知：不论是否还在账本里，都不按 0 元，并且占一台。
+    const costUnknown = list.some(x => x.managed && x.costKnown === false) || extra.unknown > 0 || this.pendingCostUnknown(ignoreOffer);
+    // 停止/被抢占且费用已知的实例不再占 GPU，存储另计。费用未知的停止实例仍占一台，避免名额被绕开。
     const pausedStorage = list
-      .filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted'))
+      .filter(x => x.managed && x.costKnown !== false && (x.phase === 'stopped' || x.phase === 'preempted'))
       .reduce((a, x) => a + (finiteNum(x.storageHr) > 0 ? x.storageHr : 0), 0);
-    const slots = active.length + extra.slots + this.heldSlots(ignoreOffer);
+    const idleUnknown = list.filter(x => x.managed && x.costKnown === false && !(ACTIVE.has(x.status) || x.phase === 'booting')).length;
+    const slots = active.length + extra.slots + this.heldSlots(ignoreOffer) + idleUnknown;
     const holds = this.openHolds(ignoreOffer);
     return {
       count: active.length + extra.slots, spend, pausedStorage, costUnknown,
@@ -1345,6 +1363,7 @@ export class Engine {
     const poolIds = this.configuredPools();
     const def = this.defaultPool;
     const token = Math.random().toString(16).slice(2, 8);
+    this.noteIssued(token, { at: Date.now(), rentMode: this.cfg.rentMode, offerId: offer.id, machineId: offer.machineId, gpuName: offer.gpuName, numGpus: offer.numGpus });
     const label = this.rigLabel(offer.gpuName, def, token);
     const onstart = buildOnstart({
       pools: poolIds.map(id => ({ id, ...minerTarget(id, {
@@ -1493,6 +1512,7 @@ export class Engine {
       orderToken: pending.token || null,
       seenInList: !!seen, seenAt: seen ? Date.now() : null,
     };
+    this.noteIssued(pending.token, pending);
     if (pending?.offerId != null) this.reservations?.delete(String(pending.offerId));
     return String(id);
   }
@@ -1569,7 +1589,38 @@ export class Engine {
     return row && typeof row === 'object' ? row : null;
   }
 
+  noteIssued(token, info = {}) {
+    const t = String(token || '');
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(t) || t === '__proto__' || t === 'constructor' || t === 'prototype') return;
+    const bag = this.st.issuedOrders ||= {};
+    const prev = Object.prototype.hasOwnProperty.call(bag, t) ? bag[t] : null;
+    bag[t] = {
+      at: info.at || prev?.at || Date.now(),
+      rentMode: info.rentMode || prev?.rentMode || null,
+      offerId: info.offerId ?? prev?.offerId ?? null,
+      machineId: info.machineId ?? prev?.machineId ?? null,
+      gpuName: info.gpuName || prev?.gpuName || '',
+      numGpus: info.numGpus || prev?.numGpus || 1,
+    };
+    const keys = Object.keys(bag);
+    if (keys.length > 2000) {
+      keys.sort((a, b) => (bag[a]?.at || 0) - (bag[b]?.at || 0));
+      for (const k of keys.slice(0, keys.length - 2000)) delete bag[k];
+    }
+  }
+
+  tokenIsOurs(token) {
+    const t = String(token || '');
+    if (!t) return false;
+    if (this.st?.issuedOrders && Object.prototype.hasOwnProperty.call(this.st.issuedOrders, t)) return true;
+    if ((this.st?.orderHistory || []).some(h => h?.token === t)) return true;
+    if (Object.values(this.st?.pendingOrders || {}).some(p => p?.token === t)) return true;
+    if (Object.values(this.st?.managed || {}).some(m => m?.orderToken === t)) return true;
+    return false;
+  }
+
   rememberRelease(p, offerKey) {
+    this.noteIssued(p?.token, { at: p?.at, rentMode: p?.rentMode, offerId: p?.offerId ?? offerKey, machineId: p?.machineId, gpuName: p?.gpuName, numGpus: p?.numGpus });
     this.st.orderHistory ||= [];
     this.st.orderHistory.push({
       offerKey, offerId: p.offerId ?? offerKey, token: p.token || null, machineId: p.machineId ?? null,
@@ -1580,22 +1631,37 @@ export class Engine {
   }
 
   restoreReleasedInstances() {
+    if (!this.rawInstances?.length) return;
+    for (const h of this.st?.orderHistory || []) this.noteIssued(h?.token, h);
+    for (const p of Object.values(this.st?.pendingOrders || {})) this.noteIssued(p?.token, p);
+    for (const m of Object.values(this.st?.managed || {})) this.noteIssued(m?.orderToken, m);
     const hist = this.st?.orderHistory || [];
-    if (!hist.length || !this.rawInstances?.length) return;
     let changed = false;
     for (const i of this.rawInstances) {
       const id = String(i.id);
       if (this.ownManaged(id)) continue;
       const tok = (String(i.label || '').match(/\btok=([A-Za-z0-9]+)/) || [])[1];
-      if (!tok) continue;
-      const hit = [...hist].reverse().find(h => h?.token && h.token === tok);
-      if (!hit || !(finiteNum(hit.dph) > 0)) continue;
-      this.st.managed[id] = {
-        offerId: hit.offerId, machineId: i.machine_id ?? hit.machineId, gpuName: i.gpu_name || hit.gpuName,
-        numGpus: i.num_gpus || hit.numGpus || 1, rentedAt: hit.at || Date.now(), dph: hit.dph,
-        bid: hit.bid ?? null, rentMode: hit.rentMode || null, seenInList: true, seenAt: Date.now(),
-        restoredFromRelease: true,
+      if (!tok || !this.tokenIsOurs(tok)) continue;
+      const hit = [...hist].reverse().find(h => h?.token && h.token === tok && finiteNum(h.dph) > 0);
+      const pend = Object.values(this.st?.pendingOrders || {}).find(p => p?.token === tok);
+      const idn = this.st.issuedOrders?.[tok] || {};
+      const base = {
+        offerId: hit?.offerId ?? pend?.offerId ?? idn.offerId ?? null,
+        machineId: i.machine_id ?? hit?.machineId ?? pend?.machineId ?? idn.machineId ?? null,
+        gpuName: i.gpu_name || hit?.gpuName || pend?.gpuName || idn.gpuName || '',
+        numGpus: i.num_gpus || hit?.numGpus || pend?.numGpus || idn.numGpus || 1,
+        rentedAt: hit?.at || pend?.at || idn.at || Date.now(),
+        rentMode: hit?.rentMode || pend?.rentMode || idn.rentMode || null,
+        orderToken: tok, seenInList: true, seenAt: Date.now(),
       };
+      if (hit) {
+        this.st.managed[id] = { ...base, dph: hit.dph, bid: hit.bid ?? null, restoredFromRelease: true };
+      } else if (pend && finiteNum(pend.dph) > 0) {
+        this.st.managed[id] = { ...base, dph: pend.dph, bid: pend.bid ?? null, restoredFromPending: true };
+      } else {
+        // 身份还在、出价已经被 40 条历史挤掉。占一台、费用未知，不用按需总价。
+        this.st.managed[id] = { ...base, dph: null, bid: null, restoredWithoutPrice: base.rentMode !== 'ondemand' };
+      }
       changed = true;
     }
     if (changed) this.save();
@@ -1721,9 +1787,10 @@ export class Engine {
     if (!m.sw && rp.want === pool && rp.actual === pool) throw new Error(`已经在挖 ${poolName(pool)}`);
     this.busy.add(id);
     try {
-      await this.vast.setLabel(id, this.rigLabel(i.gpu_name, pool));
+      const keepTok = (String(i.label || '').match(/\btok=([A-Za-z0-9]+)/) || [])[1] || m.orderToken || null;
+      await this.vast.setLabel(id, this.rigLabel(i.gpu_name, pool, keepTok));
       const from = m.sw?.from || rp.actual;
-      i.label = this.rigLabel(i.gpu_name, pool);
+      i.label = this.rigLabel(i.gpu_name, pool, keepTok);
       m.belowSince = null;
       if (!m.hashAt && !this.everHashed.has(id)) {
         // 还在部署、没出过算力：只是改了要挖的矿池，部署流程照常（矿工启动超时从现在重新计时）
@@ -1911,6 +1978,8 @@ export class Engine {
     return (err || prl || '').slice(0, 160);
   }
 
+  // 公开文档 DELETE /api/v0/instances/{id}/ ：200 且 success true 才是销毁成功；
+  // 404 且 error not_found 才是明确不存在。文档没写的正文不能当成成功。这里没有实网调用。
   destroyOutcome(r) {
     if (r && r.success === true) return 'destroyed';
     const text = `${r?.error || ''} ${r?.msg || ''}`;
@@ -1933,12 +2002,14 @@ export class Engine {
       }
       if (blacklistMin && inst?.machine_id) this.st.blacklist[inst.machine_id] = { until: Date.now() + blacklistMin * MIN, reason };
       delete this.st.managed[id];
+      this.rawInstances = (this.rawInstances || []).filter(i => String(i.id) !== id);
       this.save();
       this.log('warn', `已退租实例 ${id}（${inst ? `${inst.num_gpus}×${inst.gpu_name}` : ''}）：${reason}`);
       setTimeout(() => this.refreshVast(), 2000);
     } catch (e) {
       if (e.status === 404 || /no such|not found|does not exist|404/i.test(`${e.message || ''} ${e.body?.error || ''} ${e.body?.msg || ''}`)) {
         delete this.st.managed[id];
+        this.rawInstances = (this.rawInstances || []).filter(i => String(i.id) !== id);
         this.save();
         this.log('warn', `实例 ${id} 已经不在 vast 上，按已退租处理：${reason}`);
         return;
@@ -2042,7 +2113,7 @@ export class Engine {
     const active = list.filter(x => x.status === 'running' || x.phase === 'booting' || x.status === 'loading');
     const pausedStorage = list.filter(x => x.managed && (x.phase === 'stopped' || x.phase === 'preempted')).reduce((a, x) => a + (Number(x.storageHr) || 0), 0);
     const extra = this.committedUnlisted(list);
-    const unknown = active.filter(x => x.managed && x.costKnown === false);
+    const unknown = list.filter(x => x.managed && x.costKnown === false);
     const knownSpend = active.reduce((a, x) => a + (finiteNum(x.dph) > 0 ? x.dph : 0), 0) + pausedStorage + extra.spend;
     // 有未知费用时不把缺的当成 0，否则综合收益率会偏高。
     const unknownCount = unknown.length + extra.unknown;
