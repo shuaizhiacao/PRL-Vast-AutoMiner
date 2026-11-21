@@ -25,6 +25,7 @@ export class Vast {
   // 列出自己的所有实例。和官方 vast-cli 一样走 v1 分页接口：每页最多 25 台，用上一页返回的 next_token 当 after_token 翻页，
   // 不指定 select_cols，返回的字段和旧 v0 接口一样。万一 v1 接口不存在（404/405），退回旧的 v0 接口
   async instances() {
+    this.lastListTruncated = false;
     const rows = [];
     const params = { select_filters: {}, order_by: [{ col: 'id', dir: 'asc' }], limit: 25 };
     for (let page = 0; page < 40; page++) {
@@ -34,15 +35,17 @@ export class Vast {
       catch (e) {
         if (page === 0 && (e.status === 404 || e.status === 405)) {
           const old = await request(`${BASE}/instances/?owner=me`, { headers: this.h() });
+          this.lastListTruncated = false;
           return old?.instances || [];
         }
         throw e;
       }
       rows.push(...(r?.instances || []));
       const next = r?.next_token;
-      if (!next) break;
+      if (!next) return rows;
       params.after_token = next;
     }
+    this.lastListTruncated = true;
     return rows;
   }
 
@@ -111,6 +114,12 @@ export class Vast {
 
 export function searchBody(f, names, extra = {}) {
   const limit = Math.max(1, Math.min(200, extra.limit || f.scanRows || 20));
+  const type = extra.type || vastSearchType(rentModeOf(f));
+  const cap = Math.max(0.01, f.maxHourlySpend);
+  // 可中断搜索按 min_bid（美元/小时）封顶和排序。dph_total 是按需总价，用它过滤会丢掉出价其实很便宜的机器。
+  const priceFilter = type === 'bid'
+    ? { min_bid: { lte: cap }, order: extra.order || [['min_bid', 'asc']] }
+    : { dph_total: { lte: cap }, order: extra.order || [['dph_total', 'asc']] };
   const q = {
     verified: { eq: true },
     external: { eq: false },
@@ -118,11 +127,10 @@ export function searchBody(f, names, extra = {}) {
     rented: { eq: false },
     reliability: { gte: f.minReliability },
     num_gpus: { gte: 1, lte: f.maxGpusPerMachine },
-    dph_total: { lte: Math.max(0.01, f.maxHourlySpend) }, // 单机时租不可能超过总预算
+    ...priceFilter,
     cuda_max_good: { gte: f.minCuda },
     inet_down: { gte: f.minInetDown },
-    order: extra.order || [['dph_total', 'asc']],
-    type: extra.type || vastSearchType(rentModeOf(f)),
+    type,
     limit,
     allocated_storage: f.disk,
     ...(names?.length ? { gpu_name: { in: names.slice(0, 64) } } : {}),

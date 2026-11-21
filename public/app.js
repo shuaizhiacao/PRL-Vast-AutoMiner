@@ -135,7 +135,10 @@ function render() {
   let banner = '';
   const nd = S.netDown || {};
   const downParts = [nd.vastMin >= 3 ? `vast（${Math.round(nd.vastMin)} 分钟）` : '', nd.pearlMin >= 3 ? `Pearlhash（${Math.round(nd.pearlMin)} 分钟）` : ''].filter(Boolean);
+  const attn = S.attention || { unknownPrice: [], destroyStuck: [] };
   if (downParts.length) banner = `<div class="banner bad">⚠ 程序连不上 <b>${downParts.join('、')}</b>：止损、自动退租、算力监控都已暂停，<b>已租机器仍在计费</b>。请检查网络，或杀毒软件（如 360）是否拦截了 node.exe。</div>`;
+  else if (attn.unknownPrice?.length) banner = `<div class="banner bad">有 <b>${attn.unknownPrice.length}</b> 台机器认得出、但没有出价。新租已停下，利润底线不会按未知费用退租。点卡片上的「补录费用」即可恢复，不必先销毁。</div>`;
+  else if (attn.destroyStuck?.length) banner = `<div class="banner bad">有 <b>${attn.destroyStuck.length}</b> 台销毁结果不明确，账本仍占额。这不是实网核对过的回包。实例不在列表里时，到未确认订单里确认停止计入；不能证明 vast 已经停费。</div>`;
   else if (!c.hasApiKey) banner = `<div class="banner info">第一次使用：先在设置里填 <b>vast API Key</b>，再到「矿池」页填钱包地址。填好后程序会开始扫描市场（不会自动租，需要你手动打开「自动租用」）。<button class="small-button go" onclick="openSettings()">去设置</button></div>`;
   else if (!c.walletValid && !c.kryptexWalletValid) banner = `<div class="banner info">还没填钱包：到「矿池」页给 Pearlhash 或 Kryptex 填上 PRL 钱包地址（两个池可以用不同的钱包，方便分开统计收益）。<button class="small-button go" onclick="showPage('pools')">去填写</button></div>`;
   else if (badPool) banner = `<div class="banner bad">⚠ <b>${pn(badPool.id)}</b> 疑似故障（${esc(badPool.health.why)}，已持续 ${dur(badPool.health.badMin)}）。${c.failover && S.pools.filter(p => p.configured).length > 1 ? `持续 ${c.failoverMinutes} 分钟会把可切换的机器自动转到另一个矿池。` : '可以在「矿池」页打开故障自动切换，或手动切换机器。'}</div>`;
@@ -170,19 +173,20 @@ function render() {
       ${spark(H.map(h => h.usdPerThDay), '#a88bff')}</div>
     <div class="stat-card accent-amber"><div class="stat-top"><span>vast 余额</span><i>${esc(a.vastEmail || '')}</i></div>
       <strong>${usd(a.vastBalance)}</strong>
-      <div class="stat-foot">${s.runwayHours != null ? '按当前花费可跑 <b>' + dur(s.runwayHours * 60) + '</b>' : '当前没有计费中的机器'}</div></div>`;
+      <div class="stat-foot">${s.runwayHours != null ? '按当前花费可跑 <b>' + dur(s.runwayHours * 60) + '</b>' : (s.costState && s.costState !== 'known' && (s.count > 0 || s.unknownCostCount > 0) ? '费用未确认，无法估算还能跑多久' : '当前没有计费中的机器')}</div></div>`;
 
   $('#strip').innerHTML = `
-    <div><span>在租机器</span><b>${s.count}<span class="dim" style="display:inline;font-size:12px"> / ${c.maxInstances}</span></b><small>挖矿中 ${s.mining}${s.abnormal ? ` · <span class="down">异常 ${s.abnormal}</span>` : ''}</small></div>
+    <div><span>在租机器</span><b>${s.count}<span class="dim" style="display:inline;font-size:12px"> / ${c.maxInstances}</span></b><small>挖矿中 ${s.mining}${s.reservedCount ? ` · 未确认预留 ${s.reservedCount} 笔` : ''}${s.abnormal ? ` · <span class="down">异常 ${s.abnormal}</span>` : ''}</small></div>
     <div><span>总算力 · 10 分钟</span><b>${hs(s.totalHs)}</b><small>${num(s.prlPerDay, 1)} PRL / 天</small></div>
-    <div><span>每小时成本</span><b>${usd(s.spendHr, 3)}</b><small>${S.budget.spendCapByRunway != null && S.budget.spendCapByRunway < c.maxHourlySpend ? `续航上限 ${usd(S.budget.spendCapByRunway, 2)}` : `上限 ${usd(c.maxHourlySpend, 2)}${c.runwayGuard ? '' : ' · 续航保护关'}`}</small></div>
+    <div><span>每小时成本</span><b>${s.costState === 'known' ? usd(s.spendHr, 3) : '费用未知'}</b><small>${s.reservedCount ? (s.reservedUnknown ? `另有 ${s.reservedCount} 笔未确认预留，金额未知，未计入已发生花费` : `另有未确认预留 ${usd(s.reservedHr, 3)}/h，未计入已发生花费`) : (s.unknownCostCount ? `${s.unknownCostCount} 台费用未确认，已停止新租` : (S.budget.spendCapByRunway != null && S.budget.spendCapByRunway < c.maxHourlySpend ? `续航上限 ${usd(S.budget.spendCapByRunway, 2)}` : `上限 ${usd(c.maxHourlySpend, 2)}${c.runwayGuard ? '' : ' · 续航保护关'}`))}</small></div>
     <div><span>每小时收益</span><b>${usd(s.revenueHr, 3)}</b><small>${s.estimatedCount ? `含 ${s.estimatedCount} 台预估` : '全部实测'}</small></div>
-    <div class="tm-roi"><span>综合收益率</span><b class="${clsRoi(s.roi)}">${pct(s.roi)}</b><small>目标 ${c.targetProfitPct}% · 底线 ${c.stopLossPct}%</small></div>
-    <div><span>每日净利</span><b class="${s.profitHr >= 0 ? 'up' : 'down'}">${usd(s.profitHr * 24)}</b><small>${usd(s.profitHr, 3)} / 小时</small></div>
+    <div class="tm-roi"><span>综合收益率</span><b class="${s.costState === 'known' ? clsRoi(s.roi) : ''}">${s.costState === 'known' ? pct(s.roi) : '未知'}</b><small>目标 ${c.targetProfitPct}% · 底线 ${c.stopLossPct}%</small></div>
+    <div><span>每日净利</span><b class="${s.profitHr == null ? '' : s.profitHr >= 0 ? 'up' : 'down'}">${s.profitHr == null ? '未知' : usd(s.profitHr * 24)}</b><small>${s.profitHr == null ? '有机器费用未确认' : usd(s.profitHr, 3) + ' / 小时'}</small></div>
     ${(() => { const kx = (S.pools || []).find(p => p.id === 'kryptex' && p.configured); const kb = kx?.pending?.prl ?? 0;
       return `<div><span>矿池待结算</span><b>${num((a.prlPending || 0) + kb, 3)}<span class="dim" style="display:inline;font-size:11px"> PRL</span></b><small>${kx ? `PH ${num(a.prlPending, 2)} · KX ${num(kb, 2)}` : `${num(a.nockPending, 3)} NOCK`}</small></div>`; })()}`;
 
   renderCards();
+  renderOrders();
   renderPools();
   renderOffers();
   renderTable();
@@ -251,6 +255,33 @@ function deployDone(x) {
   return `部署 ${mm(d.hashAt - d.rentedAt)}${d.runningAt ? `（镜像 ${mm(d.runningAt - d.rentedAt)} · 矿工 ${mm(d.hashAt - d.runningAt)}）` : ''}`;
 }
 
+function renderOrders() {
+  const rows = S.orders || [];
+  const panel = $('#ordersPanel');
+  if (!panel) return;
+  panel.hidden = rows.length === 0;
+  const box = $('#orders');
+  if (!box) return;
+  box.innerHTML = rows.map(o => {
+    const money = o.dphKnown ? usd(o.dph, 3) + '/h 预留' : '预留金额未知';
+    const when = o.at ? new Date(o.at).toLocaleString('zh-CN', { hour12: false }) : '时间未知';
+    const title = o.kind === 'pending' ? '结果未知的下单' : (o.state === 'missing' ? '列表里已看不到' : '已回包、列表还没有');
+    return `<div class="log-row"><span><b>${esc(title)}</b> · ${esc(o.numGpus || 1)}×${esc(o.gpuName || '未知型号')} · ${money} · ${esc(when)}<br><span class="dim">${esc(o.reason || '')}</span></span><button type="button" class="small-button release-order" data-kind="${esc(o.kind)}" data-key="${esc(String(o.key))}">确认后停止占用</button></div>`;
+  }).join('') || '';
+  box.querySelectorAll('.release-order').forEach(btn => {
+    btn.onclick = () => releaseOrder(btn.dataset.kind, btn.dataset.key);
+  });
+}
+async function releaseOrder(kind, key) {
+  const ok = await confirmBox('停止占用', '这不能证明 vast 没有创建，也不能证明已经停止扣费。如果实例稍后出现或仍在账户里，可能继续计费，需要到 vast 里处理。<br>确定不再让这笔占用本程序的预算和台数？');
+  if (!ok) return;
+  try {
+    const r = await api('/api/orders/release', { kind, key, confirm: true });
+    toast(r.adopted || r.listed ? '列表里已经有对应机器，没有释放' : r.already ? '这笔已经处理过，没有再次释放，也没有认领' : r.released ? '已停止占用。这不能证明没有创建或已经停费' : (r.reason || '没有释放'));
+  } catch (e) { toast(e.message, true); }
+  refresh();
+}
+
 function renderCards() {
   const list = [...S.instances].sort((a, b) => isAbnormal(b) - isAbnormal(a));
   const nAb = list.filter(isAbnormal).length;
@@ -302,6 +333,7 @@ function renderCards() {
         <div class="foot-actions">
           <button class="small-button" onclick="showLogs('${x.id}','${esc(x.numGpus + '× ' + x.gpuName)}')">日志</button>
           <button class="small-button ${ab ? 'warn-btn' : ''}" ${x.phase === 'restarting' ? 'disabled' : ''} onclick="rebootInst('${x.id}')">${x.phase === 'restarting' ? '重启中…' : '↻ 重启'}</button>
+          ${x.managed && x.costKnown === false ? `<button class="small-button warn-btn" onclick="setPrice('${x.id}')">补录费用</button>` : ''}
           <button class="small-button danger" onclick="destroyInst('${x.id}','${esc(x.numGpus + '× ' + x.gpuName)}',${x.dph})">退租</button>
         </div>
       </div>
@@ -553,6 +585,15 @@ window.rent = async id => {
   const ok = await confirmBox('手动租用', `${o.numGpus}× ${esc(o.gpuName)}（${flag(o.geolocation)}）<br>${kind} · 合计 <b>${usd(o.dph, 3)}/h</b> · 预计收益率 <b>${pct(o.roi)}</b><br>下单前会用最新行情再核一次。租下后会自动部署挖矿，确定？`);
   if (!ok) return;
   try { const r = await api('/api/rent/' + id, {}); toast('租用成功，实例 ' + r.id + '，正在部署'); } catch (e) { toast('租用失败：' + e.message, true); }
+  refresh();
+};
+window.setPrice = async (id) => {
+  const raw = prompt('补录这台机器的每小时合计（美元，必须大于 0）。这是手工填写，不是从 vast 读回的。');
+  const dph = Number(raw);
+  if (!(dph > 0)) { toast('没有填写大于 0 的费用', true); return; }
+  const rentMode = confirm('确定 = 可中断实例；取消 = 按需实例') ? 'interruptible' : 'ondemand';
+  try { await api('/api/orders/price', { key: id, dph, rentMode, confirm: true }); toast('已补录费用'); }
+  catch (e) { toast(e.message, true); }
   refresh();
 };
 window.destroyInst = async (id, name, dph) => {

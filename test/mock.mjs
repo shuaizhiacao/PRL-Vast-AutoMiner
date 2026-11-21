@@ -53,10 +53,13 @@ globalThis.fetch = async (url, opt = {}) => {
       globalThis.__lastQuery = body;
       globalThis.__queries = [...(globalThis.__queries || []), { type: body.type, order: body.order, limit: body.limit, names: body.gpu_name?.in || null, id: body.id?.eq ?? null }];
       if (globalThis.__rateLimited) { globalThis.__rateLimited = false; return json({ error: 'rate_limited', msg: 'API requests too frequent' }, 429); }
-      let list = offers.filter(o => o.dph_total <= body.dph_total.lte && (!body.gpu_name?.in || body.gpu_name.in.includes(o.gpu_name)));
+      let list = offers.filter(o => !body.gpu_name?.in || body.gpu_name.in.includes(o.gpu_name));
+      if (body.dph_total?.lte != null) list = list.filter(o => o.dph_total <= body.dph_total.lte);
+      if (body.min_bid?.lte != null) list = list.filter(o => (o.min_bid ?? Infinity) <= body.min_bid.lte);
       if (body.id?.eq != null) list = list.filter(o => o.id === body.id.eq || String(o.id) === String(body.id.eq));
       const ord = body.order?.[0];
       if (ord?.[0] === 'dph_total' && ord?.[1] === 'asc') list = [...list].sort((a, b) => a.dph_total - b.dph_total || a.id - b.id);
+      if (ord?.[0] === 'min_bid' && ord?.[1] === 'asc') list = [...list].sort((a, b) => (a.min_bid ?? Infinity) - (b.min_bid ?? Infinity) || a.id - b.id);
       if (ord?.[0] === 'flops_per_dphtotal') list = [...list].sort((a, b) => (b.flops_per_dphtotal || 0) - (a.flops_per_dphtotal || 0));
       list = list.slice(0, body.limit || 1000);
       if (globalThis.__quotaLeft != null) {

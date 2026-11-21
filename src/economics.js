@@ -36,9 +36,10 @@ export function bandwidthHourly(raw, gbPerHour) {
   if (allowance == null || allowance < 0) return { ok: false, why: '带宽用量设置无效' };
   const upMissing = raw?.inet_up_cost == null || raw?.inet_up_cost === '';
   const downMissing = raw?.inet_down_cost == null || raw?.inet_down_cost === '';
-  if (upMissing && downMissing) return { ok: true, known: false, hr: 0 };
-  const up = upMissing ? 0 : finiteNum(raw.inet_up_cost);
-  const down = downMissing ? 0 : finiteNum(raw.inet_down_cost);
+  // 两个字段都缺：未知，不是 0。只有明确写出 0 才是免费流量。缺一边也算不齐。
+  if (upMissing || downMissing) return { ok: true, known: false, hr: null, why: '带宽单价未知' };
+  const up = finiteNum(raw.inet_up_cost);
+  const down = finiteNum(raw.inet_down_cost);
   if (up == null || down == null || up < 0 || down < 0) return { ok: false, why: '带宽单价无效' };
   return { ok: true, known: true, hr: (up + down) * allowance };
 }
@@ -68,6 +69,7 @@ export function quoteOffer(raw, cfg, { revenuePerHsHour, hashrateHs, mode } = {}
   const revenueHr = hs * revRate;
   const bw = bandwidthHourly(raw, cfg?.bandwidthGbPerHour ?? 0);
   if (!bw.ok) return { ok: false, why: bw.why };
+  if (!bw.known) return { ok: false, why: '带宽单价未知，成本不齐，不能下单' };
   const st = storageHourly(raw, cfg?.disk);
   if (!st.ok) return { ok: false, why: st.why };
   const target = finiteNum(cfg?.targetProfitPct);
@@ -107,15 +109,17 @@ export function quoteOffer(raw, cfg, { revenuePerHsHour, hashrateHs, mode } = {}
   let compute = gpu != null && gpu > 0 ? gpu : (base != null && base > 0 ? base : null);
   if (compute != null && !st.known) return { ok: false, why: '按需报价有算力价但没有存储费用' };
   if (compute == null) {
+    // dph_total 不含按流量计的带宽。带宽已知时加在合计上；未知已在上面拒绝。
     const total = finiteNum(raw?.dph_total);
     if (!(total > 0)) return { ok: false, why: '缺少有效的按需时租 dph_total' };
-    const roi = (revenueHr - total) / total * 100;
+    const dph = total + bw.hr;
+    const roi = (revenueHr - dph) / dph * 100;
     return {
       ok: true, rentable: roi + 1e-6 >= target, why: '', rentMode, legacyTotal: true,
-      revenueHr, computeHr: null, storageHr: 0, bandwidthHr: 0, bandwidthKnown: false,
-      dph: total, minBid: finiteNum(raw?.min_bid), bid: null, maxBid: null,
-      roi, th: hs / 1e12, thPerDollar: (hs / 1e12) / total,
-      thPer01: (hs / 1e12) / (total / 0.1),
+      revenueHr, computeHr: null, storageHr: 0, bandwidthHr: bw.hr, bandwidthKnown: true,
+      dph, minBid: finiteNum(raw?.min_bid), bid: null, maxBid: null,
+      roi, th: hs / 1e12, thPerDollar: (hs / 1e12) / dph,
+      thPer01: (hs / 1e12) / (dph / 0.1),
     };
   }
   const dph = compute + st.hr + bw.hr;
@@ -238,10 +242,8 @@ export function resolveScanInterval({ baseMs, fastMs, hotActive, quotaPaceMs }) 
 // 预热只挡住算力爬坡噪声。保守满算力仍然亏钱时走更短的退出，不在预热里一直耗着。
 export function profitFloorDecision(s) {
   const floor = s.floorPct;
-  if (!s.costKnown || !(finiteNum(s.costHr) > 0)) {
-    if (s.unknownForMin >= s.unknownExitMin) return { action: 'exit', path: 'unknown-cost', reason: '费用未知，无法确认利润' };
-    return { action: 'hold', path: 'unknown-cost' };
-  }
+  // 费用未知时只停住，不按亏损退出。未知不能当成 0 元成本。
+  if (!s.costKnown || !(finiteNum(s.costHr) > 0)) return { action: 'hold', path: 'unknown-cost', reason: '费用未知，不按收益率退出' };
   const expNeg = s.marketFresh && Number.isFinite(s.expectedRoi) && s.expectedRoi < 0;
   if (expNeg && s.negForMin >= s.negExitMin) {
     return { action: 'exit', path: 'negative', reason: '即使按保守满算力，收益也覆盖不了已知成本' };
