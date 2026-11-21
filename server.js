@@ -64,6 +64,12 @@ if (boot.proxy && !process.env.PRL_PROXY_APPLIED) {
         if (b.kind === 'pending') return send(res, 200, await engine.releasePending(b.key, { confirm }));
         return send(res, 200, await engine.releaseUnlisted(b.key, { confirm }));
       }
+      if (p === '/api/orders/price' && req.method === 'POST') {
+        const b = await body(req);
+        if (typeof b.key !== 'string' && typeof b.key !== 'number') return send(res, 400, { error: '实例编号无效' });
+        if (b.claim === true) return send(res, 200, await engine.claimInstance(b.key, b));
+        return send(res, 200, await engine.setInstancePrice(b.key, b));
+      }
       if (p === '/api/settings' && req.method === 'POST') return send(res, 200, { ok: true, ...engine.updateConfig(await body(req)) });
       if (p === '/api/scan' && req.method === 'POST') { await engine.scan(true); return send(res, 200, { ok: true }); }
       let m;
@@ -74,7 +80,7 @@ if (boot.proxy && !process.env.PRL_PROXY_APPLIED) {
         return send(res, 200, { ok: true, id });
       }
       if ((m = p.match(/^\/api\/instances\/(\d+)\/destroy$/)) && req.method === 'POST') {
-        await engine.destroy(m[1], '手动退租');
+        await engine.destroy(m[1], '手动退租', 0, { force: true });
         return send(res, 200, { ok: true });
       }
       if ((m = p.match(/^\/api\/instances\/(\d+)\/logs$/)) && req.method === 'GET') {

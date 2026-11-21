@@ -135,7 +135,10 @@ function render() {
   let banner = '';
   const nd = S.netDown || {};
   const downParts = [nd.vastMin >= 3 ? `vast（${Math.round(nd.vastMin)} 分钟）` : '', nd.pearlMin >= 3 ? `Pearlhash（${Math.round(nd.pearlMin)} 分钟）` : ''].filter(Boolean);
+  const attn = S.attention || { unknownPrice: [], destroyStuck: [] };
   if (downParts.length) banner = `<div class="banner bad">⚠ 程序连不上 <b>${downParts.join('、')}</b>：止损、自动退租、算力监控都已暂停，<b>已租机器仍在计费</b>。请检查网络，或杀毒软件（如 360）是否拦截了 node.exe。</div>`;
+  else if (attn.unknownPrice?.length) banner = `<div class="banner bad">有 <b>${attn.unknownPrice.length}</b> 台机器认得出、但没有出价。新租已停下，利润底线不会按未知费用退租。点卡片上的「补录费用」即可恢复，不必先销毁。</div>`;
+  else if (attn.destroyStuck?.length) banner = `<div class="banner bad">有 <b>${attn.destroyStuck.length}</b> 台销毁结果不明确，账本仍占额。这不是实网核对过的回包。实例不在列表里时，到未确认订单里确认停止计入；不能证明 vast 已经停费。</div>`;
   else if (!c.hasApiKey) banner = `<div class="banner info">第一次使用：先在设置里填 <b>vast API Key</b>，再到「矿池」页填钱包地址。填好后程序会开始扫描市场（不会自动租，需要你手动打开「自动租用」）。<button class="small-button go" onclick="openSettings()">去设置</button></div>`;
   else if (!c.walletValid && !c.kryptexWalletValid) banner = `<div class="banner info">还没填钱包：到「矿池」页给 Pearlhash 或 Kryptex 填上 PRL 钱包地址（两个池可以用不同的钱包，方便分开统计收益）。<button class="small-button go" onclick="showPage('pools')">去填写</button></div>`;
   else if (badPool) banner = `<div class="banner bad">⚠ <b>${pn(badPool.id)}</b> 疑似故障（${esc(badPool.health.why)}，已持续 ${dur(badPool.health.badMin)}）。${c.failover && S.pools.filter(p => p.configured).length > 1 ? `持续 ${c.failoverMinutes} 分钟会把可切换的机器自动转到另一个矿池。` : '可以在「矿池」页打开故障自动切换，或手动切换机器。'}</div>`;
@@ -330,6 +333,7 @@ function renderCards() {
         <div class="foot-actions">
           <button class="small-button" onclick="showLogs('${x.id}','${esc(x.numGpus + '× ' + x.gpuName)}')">日志</button>
           <button class="small-button ${ab ? 'warn-btn' : ''}" ${x.phase === 'restarting' ? 'disabled' : ''} onclick="rebootInst('${x.id}')">${x.phase === 'restarting' ? '重启中…' : '↻ 重启'}</button>
+          ${x.managed && x.costKnown === false ? `<button class="small-button warn-btn" onclick="setPrice('${x.id}')">补录费用</button>` : ''}
           <button class="small-button danger" onclick="destroyInst('${x.id}','${esc(x.numGpus + '× ' + x.gpuName)}',${x.dph})">退租</button>
         </div>
       </div>
@@ -581,6 +585,15 @@ window.rent = async id => {
   const ok = await confirmBox('手动租用', `${o.numGpus}× ${esc(o.gpuName)}（${flag(o.geolocation)}）<br>${kind} · 合计 <b>${usd(o.dph, 3)}/h</b> · 预计收益率 <b>${pct(o.roi)}</b><br>下单前会用最新行情再核一次。租下后会自动部署挖矿，确定？`);
   if (!ok) return;
   try { const r = await api('/api/rent/' + id, {}); toast('租用成功，实例 ' + r.id + '，正在部署'); } catch (e) { toast('租用失败：' + e.message, true); }
+  refresh();
+};
+window.setPrice = async (id) => {
+  const raw = prompt('补录这台机器的每小时合计（美元，必须大于 0）。这是手工填写，不是从 vast 读回的。');
+  const dph = Number(raw);
+  if (!(dph > 0)) { toast('没有填写大于 0 的费用', true); return; }
+  const rentMode = confirm('确定 = 可中断实例；取消 = 按需实例') ? 'interruptible' : 'ondemand';
+  try { await api('/api/orders/price', { key: id, dph, rentMode, confirm: true }); toast('已补录费用'); }
+  catch (e) { toast(e.message, true); }
   refresh();
 };
 window.destroyInst = async (id, name, dph) => {

@@ -1330,5 +1330,120 @@ ok(snap.market.nockPerThDay > 0 && snap.account.nockPending === 0.0295, `面板�
   ok(!eN.st.managed['701'] && !eN.st.blacklist[701], '可中断实例低于利润底线会退租，但不拉黑主机');
 }
 
+{
+  const eI = new Engine();
+  eI.log = () => {};
+  eI.instancesOk = true;
+  eI.st.issuedOrders = {};
+  eI.st.orderHistory = [];
+  eI.st.pendingOrders = {};
+  eI.st.managed = {};
+  const now = Date.now();
+  eI.rawInstances = [{
+    id: 1, label: 'prl-auto-RTX4070S tok=cap0 pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1,
+    actual_status: 'running', intended_status: 'running', dph_total: 9, machine_id: 1,
+    inet_up_cost: 0, inet_down_cost: 0, storage_cost: 0, start_date: now / 1000 - 3600,
+  }];
+  for (let i = 0; i <= 2000; i++) eI.noteIssued('cap' + i, { at: i, dph: i === 0 ? 0.19 : 0.01, bid: 0.19, rentMode: 'interruptible' });
+  const kept = eI.instances().find(i => i.id === '1');
+  ok(eI.tokenIsOurs('cap0') && !eI.tokenIsOurs('cap1') && kept && kept.managed && kept.costKnown && kept.dph != null && kept.dph < 5, '还在列表上的标签不会被身份上限挤掉，并使用记下的出价');
+
+  eI.rawInstances = [{
+    id: 2, label: 'prl-auto-RTX4070S tok=bare pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1,
+    actual_status: 'running', intended_status: 'running', dph_total: 9, machine_id: 2,
+    inet_up_cost: 0, inet_down_cost: 0, storage_cost: 0, start_date: now / 1000 - 3600,
+  }];
+  eI.st.managed = {};
+  eI.noteIssued('bare', { at: now, rentMode: 'interruptible' });
+  const bare = eI.instances().find(i => i.id === '2');
+  const before = eI.budget(eI.instances());
+  let floor = false;
+  eI.vast.destroy = async () => { floor = true; return { success: true }; };
+  eI.samples.set('2', [0, 1, 2, 3, 4, 5].map(k => ({ t: now - (6 - k) * MIN, hs: 40e12 })));
+  eI.everHashed.add('2');
+  eI.cfg.stopLossPct = 12; eI.cfg.stopLossMinutes = 1; eI.cfg.hashWarmupMinutes = 0;
+  eI.market.updatedAt = Date.now();
+  await eI.autoDestroy(eI.instances());
+  ok(bare && bare.managed && bare.costKnown === false && before.roomSpend === 0 && before.costUnknown && !floor, '有身份但没有出价时占未知费用，利润底线不销毁');
+  await eI.setInstancePrice('2', { dph: 0.11, bid: 0.11, rentMode: 'interruptible', confirm: true });
+  const after = eI.budget(eI.instances());
+  ok(after.costUnknown === false && after.roomSpend > 0 && eI.instances().find(i => i.id === '2').dph != null, '补录出价后恢复可租额度，不必先销毁');
+
+  eI.rawInstances = [{ id: 42, label: 'prl-auto-RTX4070S pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1, actual_status: 'running', dph_total: 3, machine_id: 42, start_date: now / 1000 - 600 }];
+  eI.st.managed = {};
+  eI.st.issuedOrders = {};
+  ok(eI.instances().find(i => i.id === '42').managed === false, '没有本地身份记录时，相近前缀不会自动认领');
+  let claimErr = '';
+  try { await eI.claimInstance('42', { dph: 0.2 }); } catch (e) { claimErr = e.message; }
+  ok(/确认/.test(claimErr), '手工认领必须显式确认');
+  await eI.claimInstance('42', { dph: 0.2, rentMode: 'interruptible', confirm: true });
+  ok(eI.st.managed['42'] && eI.st.managed['42'].claimedManually && eI.st.managed['42'].dph === 0.2, '确认并填写费用后才能手工认领');
+
+  eI.st.managed = { '77': { dph: 0.25, bid: 0.25, rentMode: 'interruptible', gpuName: 'RTX 4070S', numGpus: 1 } };
+  eI.rawInstances = [];
+  let calls = 0;
+  eI.vast.destroy = async () => { calls++; return { success: false, error: 'still_running' }; };
+  for (let n = 0; n < 3; n++) { try { await eI.destroy('77', '重试'); } catch {} }
+  const stuck = eI.attention().destroyStuck.find(x => x.id === '77');
+  try { await eI.destroy('77', '重试'); } catch {}
+  ok(eI.st.managed['77'] && eI.st.managed['77'].destroyFails === 3 && calls === 3 && stuck && stuck.fails === 3, '文档没写的销毁正文保留账本，并露出失败次数，连续失败后先停自动重试');
+  eI.vast.destroy = async () => {
+    const err = new Error('HTTP 400：not found 404');
+    err.status = 400;
+    err.body = { success: false, error: 'invalid_args', msg: 'not found 404' };
+    throw err;
+  };
+  eI.st.managed['78'] = { dph: 0.2, rentMode: 'ondemand' };
+  let badClear = false;
+  try { await eI.destroy('78', '参数错误', 0, { force: true }); } catch { badClear = true; }
+  ok(badClear && eI.st.managed['78'], '400 正文里的 404 或 not found 不清账');
+  const dropped = await eI.releaseUnlisted('77', { confirm: true });
+  ok(dropped.released && !eI.st.managed['77'], '不在列表里的占额可以确认停止计入');
+
+  eI.st.managed = { '5': { orderToken: 'abc1', dph: 0.2, bid: 0.2, rentMode: 'interruptible', offerId: '9', rentedAt: now, gpuName: 'RTX 4070S', numGpus: 1 } };
+  eI.rawInstances = [];
+  eI.st.orderHistory = [];
+  await eI.releaseUnlisted('5', { confirm: true });
+  ok(eI.st.orderHistory.at(-1)?.token === 'abc1' && eI.st.orderHistory.at(-1)?.dph === 0.2, '停止计入时写下真实的订单标签和出价');
+
+  eI.rawInstances = [{
+    id: 8, label: 'prl-auto-RTX4070S tok=abcd pool=kryptex', gpu_name: 'RTX 4070S', num_gpus: 1,
+    actual_status: 'running', intended_status: 'running', dph_total: 0.2, machine_id: 8, start_date: now / 1000 - 7200,
+  }];
+  eI.st.managed = { '8': { sw: { from: 'pearlhash', to: 'kryptex', at: now - 20 * MIN }, orderToken: 'abcd', hashAt: now - 60 * MIN, rentMode: 'interruptible', dph: 0.1, bid: 0.1, gpuName: 'RTX 4070S', numGpus: 1 } };
+  eI.poolConfigured = () => true;
+  eI.fetchLogs = async () => ({ t: now, text: '' });
+  let rolled = '';
+  eI.vast.setLabel = async (_id, label) => { rolled = label; };
+  await eI.checkSwitches(eI.instances());
+  ok(/tok=abcd/.test(rolled) && /pool=pearlhash/.test(rolled), '切换失败改回原矿池时保留 tok=');
+
+  eI.workersOk = true;
+  eI.rawInstances = [{
+    id: 9, label: 'prl-auto-RTX4070S pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1,
+    actual_status: 'running', intended_status: 'running', dph_total: 0.2, machine_id: 9,
+    start_date: now / 1000 - 7200, inet_up_cost: 0, inet_down_cost: 0, storage_cost: 0,
+  }];
+  eI.st.managed = { '9': { rentedAt: now - 60 * MIN, dph: 0.1, bid: 0.1, rentMode: null, restoredFromIdentity: true, hashAt: now - 40 * MIN, gpuName: 'RTX 4070S', numGpus: 1, machineId: 9 } };
+  eI.samples.set('9', [{ t: now - 20 * MIN, hs: 40e12 }, ...Array.from({ length: 12 }, (_, k) => ({ t: now - (12 - k) * MIN, hs: 0 }))]);
+  eI.everHashed.add('9');
+  eI.st.blacklist = {};
+  eI.vast.destroy = async () => ({ success: true });
+  await eI.autoDestroy(eI.instances());
+  ok(!eI.st.managed['9'] && !eI.st.blacklist[9], '恢复记录没有租用方式时不按按需拉黑');
+
+  eI.rawInstances = [{
+    id: 3, label: 'prl-auto-RTX4070S tok=zz9 pool=pearlhash', gpu_name: 'RTX 4070S', num_gpus: 1,
+    actual_status: 'exited', intended_status: 'stopped', dph_total: 2, machine_id: 3, start_date: now / 1000 - 3600,
+  }];
+  eI.st.managed = {};
+  eI.st.pendingOrders = {};
+  eI.noteIssued('zz9', { at: now, rentMode: 'interruptible' });
+  const shown = eI.summary(eI.instances());
+  eI.st.pendingOrders = { zz: { token: 'zz9', dph: 0.2, state: 'unknown', offerId: 'zz' } };
+  const slot = eI.ordersView().find(o => o.kind === 'pending');
+  ok(shown.count >= 1 && slot && slot.occupiesSlot === false, '停止中的未知费用会计入台数，已出现的订单不再显示另占一台');
+}
+
 console.log(`\n${pass} 通过，${fail} 失败`);
 process.exit(fail ? 1 : 0);

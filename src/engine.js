@@ -554,6 +554,7 @@ export class Engine {
         failoverFrom: m?.failoverFrom || null, poolSince: m?.poolSince || null,
         series,
         id, managed, ledger: !!m, label: i.label || '', gpuName: i.gpu_name, numGpus, dph, costKnown,
+        destroyFails: m?.destroyFails || 0, lastDestroyError: m?.lastDestroyError || '',
         status: i.actual_status || 'unknown', statusMsg: (i.status_msg || '').slice(0, 160),
         geolocation: i.geolocation || '', machineId: i.machine_id, ip: i.public_ipaddr || '',
         gpuUtil: i.gpu_util ?? null, gpuTemp: i.gpu_temp ?? null,
@@ -900,6 +901,9 @@ export class Engine {
     await this.checkSwitches(list);
     await this.failover(list);
     list = this.instances();
+    const attn = this.attention(list);
+    if (attn.unknownPrice.length) this._warnOnce('unkprice', `有 ${attn.unknownPrice.length} 台认得出但没有出价，已停止新开。可以补录每小时费用，不必为了恢复租用而退掉还在正常工作的机器`);
+    if (attn.destroyStuck.length) this._warnOnce('dstuck', `有 ${attn.destroyStuck.length} 台销毁结果不明确，账本仍占额。实例不在列表里时，可以确认停止计入；这不能证明 vast 已停费`);
     if (this.cfg.autoDestroy) {
       try { await this.autoDestroy(list); }
       catch (e) { this.log('error', `自动退租本轮没有全部完成：${e.message}`); }
@@ -967,7 +971,7 @@ export class Engine {
         if (stuckMin > 4) await this.fetchLogs(x.id, false).catch(() => {});
         if (stuckMin > this.cfg.minerStartTimeoutMinutes) {
           const hint = this.logHint(x.id);
-          const churn = m.rentMode === 'interruptible';
+          const churn = this.keepsHost(m);
           const why = churn
             ? `开机后 ${this.cfg.minerStartTimeoutMinutes} 分钟矿工仍未上线（可中断实例，销毁以停止计费，不把主机当成故障拉黑）${hint ? '：' + hint : ''}`
             : `开机后 ${this.cfg.minerStartTimeoutMinutes} 分钟矿工仍未上线${hint ? '：' + hint : '（机器日志里没有矿工输出）'}`;
@@ -981,7 +985,7 @@ export class Engine {
       if (x.phase === 'offline' && (m.hashAt || this.everHashed.has(x.id))) {
         if (now - m.offlineSince >= 10 * MIN) {
           // 可中断实例被报成 offline 常常是抢占，不是主机硬件故障，不拉黑。
-          const churn = m.rentMode === 'interruptible';
+          const churn = this.keepsHost(m);
           const why = churn
             ? `可中断实例被报告离线超过 10 分钟（可能是抢占，不拉黑主机；vast 状态 ${x.status}${x.statusMsg ? '：' + x.statusMsg : ''}）`
             : `机器离线超过 10 分钟（vast 状态 ${x.status}${x.statusMsg ? '：' + x.statusMsg : ''}）`;
@@ -991,7 +995,7 @@ export class Engine {
       }
       // 1) 部署失败：超时仍无算力（从租下或最近一次重启算起），只针对从没出过算力的机器
       if ((x.phase === 'booting' || x.phase === 'offline') && x.bootAgeMin > this.cfg.bootTimeoutMinutes) {
-        const churn = m.rentMode === 'interruptible';
+        const churn = this.keepsHost(m);
         const why = churn
           ? `部署超时 ${this.cfg.bootTimeoutMinutes} 分钟仍无算力（可中断实例，不拉黑主机；${x.statusMsg || x.status}）`
           : `部署超时 ${this.cfg.bootTimeoutMinutes} 分钟仍无算力（${x.statusMsg || x.status}）`;
@@ -1006,7 +1010,7 @@ export class Engine {
         const zeros = arr.filter(s => s.t >= (zeroSince ?? now));
         // 连续为 0 的时间真的超过 10 分钟，且这段时间里至少采到 10 个样本（避免程序刚启动/断网恢复时误判）
         if (zeroSince && now - zeroSince >= 10 * MIN && zeros.length >= 10 && zeros.every(s => s.hs === 0)) {
-          const churn = m.rentMode === 'interruptible';
+          const churn = this.keepsHost(m);
           const why = x.restartAt ? `重启后 ${this.cfg.bootTimeoutMinutes} 分钟仍无算力` : (churn ? '可中断实例矿工掉线超过 10 分钟（销毁以停止计费，不拉黑主机）' : '矿工掉线超过 10 分钟');
           await this.destroy(x.id, why, churn ? 0 : 6 * 60);
           return;
@@ -1019,7 +1023,7 @@ export class Engine {
         if (stats.stale && stats.newestAgeMs < Infinity) {
           if (!m.staleSince) { m.staleSince = now; this.save(); }
           if (now - m.staleSince >= this.cfg.stopLossMinutes * MIN) {
-            const churn = m.rentMode === 'interruptible';
+            const churn = this.keepsHost(m);
             const why = churn
               ? `可中断实例算力样本过期超过 ${this.cfg.stopLossMinutes} 分钟（销毁以停止计费，不拉黑主机）`
               : `算力样本过期超过 ${this.cfg.stopLossMinutes} 分钟`;
@@ -1069,7 +1073,7 @@ export class Engine {
     }
     if (d.action === 'exit') {
       const shown = Number.isFinite(x.roi) ? `近期收益率 ${x.roi.toFixed(1)}%` : '没有可靠的持续收益率';
-      const churn = m.rentMode === 'interruptible';
+      const churn = this.keepsHost(m);
       await this.destroy(x.id, `${d.reason}（${shown}，底线 ${this.cfg.stopLossPct}%）${churn ? '；可中断实例不拉黑主机' : ''}`, churn ? 0 : 60);
       return;
     }
@@ -1382,6 +1386,7 @@ export class Engine {
       pools: poolIds, pool: def, mode: this.cfg.launchMode === 'args' ? 'args' : 'ssh', label,
     };
     this.st.pendingOrders[offerKey] = pending;
+    this.noteIssued(token, pending);
     this.inflightRent.add(offerKey);
     this.lastRentAt = Date.now();
     this.save();
@@ -1589,11 +1594,29 @@ export class Engine {
     return row && typeof row === 'object' ? row : null;
   }
 
+  keepsHost(m) {
+    if (m?.rentMode === 'ondemand') return false;
+    if (m?.rentMode === 'interruptible') return true;
+    // 恢复出来但没记下租用方式时，不能按按需去拉黑。
+    return !!(m?.restoredFromRelease || m?.restoredWithoutPrice || m?.restoredFromPending || m?.restoredFromIdentity);
+  }
+
+  liveTokens() {
+    const live = new Set();
+    for (const i of this.rawInstances || []) {
+      const tok = (String(i.label || '').match(/\btok=([A-Za-z0-9]+)/) || [])[1];
+      if (tok) live.add(tok);
+    }
+    return live;
+  }
+
   noteIssued(token, info = {}) {
     const t = String(token || '');
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(t) || t === '__proto__' || t === 'constructor' || t === 'prototype') return;
     const bag = this.st.issuedOrders ||= {};
     const prev = Object.prototype.hasOwnProperty.call(bag, t) ? bag[t] : null;
+    const dph = finiteNum(info.dph) > 0 ? finiteNum(info.dph) : (finiteNum(prev?.dph) > 0 ? finiteNum(prev.dph) : null);
+    const bid = finiteNum(info.bid) > 0 ? finiteNum(info.bid) : (finiteNum(prev?.bid) > 0 ? finiteNum(prev.bid) : null);
     bag[t] = {
       at: info.at || prev?.at || Date.now(),
       rentMode: info.rentMode || prev?.rentMode || null,
@@ -1601,12 +1624,15 @@ export class Engine {
       machineId: info.machineId ?? prev?.machineId ?? null,
       gpuName: info.gpuName || prev?.gpuName || '',
       numGpus: info.numGpus || prev?.numGpus || 1,
+      dph, bid,
     };
+    if (!this.instancesOk) return;
+    const live = this.liveTokens();
     const keys = Object.keys(bag);
-    if (keys.length > 2000) {
-      keys.sort((a, b) => (bag[a]?.at || 0) - (bag[b]?.at || 0));
-      for (const k of keys.slice(0, keys.length - 2000)) delete bag[k];
-    }
+    if (keys.length <= 2000) return;
+    const extra = keys.length - 2000;
+    const evictable = keys.filter(k => !live.has(k)).sort((a, b) => (bag[a]?.at || 0) - (bag[b]?.at || 0));
+    for (const k of evictable.slice(0, extra)) delete bag[k];
   }
 
   tokenIsOurs(token) {
@@ -1654,13 +1680,17 @@ export class Engine {
         rentMode: hit?.rentMode || pend?.rentMode || idn.rentMode || null,
         orderToken: tok, seenInList: true, seenAt: Date.now(),
       };
+      const snapDph = finiteNum(idn.dph);
+      const snapBid = finiteNum(idn.bid);
       if (hit) {
         this.st.managed[id] = { ...base, dph: hit.dph, bid: hit.bid ?? null, restoredFromRelease: true };
       } else if (pend && finiteNum(pend.dph) > 0) {
         this.st.managed[id] = { ...base, dph: pend.dph, bid: pend.bid ?? null, restoredFromPending: true };
+      } else if (snapDph > 0 || snapBid > 0) {
+        this.st.managed[id] = { ...base, dph: snapDph > 0 ? snapDph : null, bid: snapBid > 0 ? snapBid : null, restoredFromIdentity: true };
       } else {
-        // 身份还在、出价已经被 40 条历史挤掉。占一台、费用未知，不用按需总价。
-        this.st.managed[id] = { ...base, dph: null, bid: null, restoredWithoutPrice: base.rentMode !== 'ondemand' };
+        // 身份还在、出价没有留下。占一台、费用未知，任何租用方式都不用按需总价。
+        this.st.managed[id] = { ...base, dph: null, bid: null, restoredWithoutPrice: true };
       }
       changed = true;
     }
@@ -1727,7 +1757,10 @@ export class Engine {
         kept.seenInList = true; kept.seenAt = Date.now(); this.save();
         return { ok: true, listed: true, released: false, already: false, adopted: false, uncertain: false, reason: '只读列表里已经有这台实例，没有释放' };
       }
-      this.rememberRelease({ ...kept, token: kept.token || null, at: kept.rentedAt }, String(kept.offerId || id));
+      this.rememberRelease({
+        ...kept, token: kept.orderToken || kept.token || null, at: kept.rentedAt,
+        dph: kept.dph, bid: kept.bid, rentMode: kept.rentMode,
+      }, String(kept.offerId || id));
       this.st.orderHistory[this.st.orderHistory.length - 1].instanceId = id;
       delete this.st.managed[id];
       this.save();
@@ -1746,7 +1779,7 @@ export class Engine {
       kind: 'pending', key, state: p?.state || 'unknown', certain: false,
       at: p?.at || null, ...money(p?.dph), gpuName: p?.gpuName || '', numGpus: p?.numGpus || 1,
       machineId: p?.machineId ?? null, offerId: p?.offerId ?? key, rentMode: p?.rentMode || null,
-      occupiesSlot: true,
+      occupiesSlot: !this.sameOrderAdopted(p),
       reason: p?.state === 'inflight'
         ? '创建请求已写入本地，正在等待 vast 的结果。现在还不能确定是否已经创建'
         : (p?.unknownReason || '下单结果未知。空列表不能证明没有创建'),
@@ -1853,7 +1886,11 @@ export class Engine {
       const back = sw.from && sw.from !== sw.to && this.poolConfigured(sw.from) ? sw.from : null;
       if (back) {
         m.pool = back;
-        try { await this.vast.setLabel(x.id, this.rigLabel(x.gpuName, back)); } catch {}
+        const keepTok = (String(x.label || '').match(/\btok=([A-Za-z0-9]+)/) || [])[1] || m.orderToken || null;
+        const backLabel = this.rigLabel(x.gpuName, back, keepTok);
+        try { await this.vast.setLabel(x.id, backLabel); } catch {}
+        const raw = (this.rawInstances || []).find(i => String(i.id) === String(x.id));
+        if (raw) raw.label = backLabel;
       }
       if (sw.auto && m.failoverFrom === back) delete m.failoverFrom;
       this.st.switchFails = (this.st.switchFails || 0) + 1;
@@ -1980,16 +2017,32 @@ export class Engine {
 
   // 公开文档 DELETE /api/v0/instances/{id}/ ：200 且 success true 才是销毁成功；
   // 404 且 error not_found 才是明确不存在。文档没写的正文不能当成成功。这里没有实网调用。
+  documentedGone(e) {
+    if (e?.status !== 404) return false;
+    const body = e.body && typeof e.body === 'object' ? e.body : null;
+    if (!body) return true;
+    if (body.success === true) return false;
+    const err = String(body.error || '');
+    if (err === 'not_found' || err === 'no_such_instance') return true;
+    const msg = String(body.msg || '');
+    if (/instance not found|no such instance|does not exist/i.test(msg)) return true;
+    if (err) return false;
+    return true;
+  }
+
   destroyOutcome(r) {
     if (r && r.success === true) return 'destroyed';
-    const text = `${r?.error || ''} ${r?.msg || ''}`;
-    if (r && r.success === false && /not.?found|no such|does not exist|404/i.test(text)) return 'absent';
     return 'unknown';
   }
 
-  async destroy(id, reason, blacklistMin = 0) {
+  async destroy(id, reason, blacklistMin = 0, { force = false } = {}) {
     id = String(id);
     if (this.busy.has(id)) return;
+    const held = this.st.managed[id];
+    if (!force && held?.destroyRetryAfter && Date.now() < held.destroyRetryAfter) {
+      this._warnOnce('dfail-' + id, `实例 ${id} 销毁已失败 ${held.destroyFails} 次，账本保留。到点会再试；也可以在订单里确认停止计入（不能证明 vast 已停费）`);
+      return;
+    }
     this.busy.add(id);
     try {
       const inst = this.rawInstances.find(i => String(i.id) === id);
@@ -1997,7 +2050,8 @@ export class Engine {
       const outcome = this.destroyOutcome(r);
       if (outcome !== 'destroyed') {
         const err = new Error(r?.msg || r?.error || '销毁结果不明确，实例记录仍保留');
-        err.status = outcome === 'absent' ? 404 : 0;
+        err.status = 0;
+        err.body = r;
         throw err;
       }
       if (blacklistMin && inst?.machine_id) this.st.blacklist[inst.machine_id] = { until: Date.now() + blacklistMin * MIN, reason };
@@ -2007,7 +2061,7 @@ export class Engine {
       this.log('warn', `已退租实例 ${id}（${inst ? `${inst.num_gpus}×${inst.gpu_name}` : ''}）：${reason}`);
       setTimeout(() => this.refreshVast(), 2000);
     } catch (e) {
-      if (e.status === 404 || /no such|not found|does not exist|404/i.test(`${e.message || ''} ${e.body?.error || ''} ${e.body?.msg || ''}`)) {
+      if (this.documentedGone(e)) {
         delete this.st.managed[id];
         this.rawInstances = (this.rawInstances || []).filter(i => String(i.id) !== id);
         this.save();
@@ -2015,8 +2069,13 @@ export class Engine {
         return;
       }
       const m = this.st.managed[id];
-      if (m) { m.destroyFails = (m.destroyFails || 0) + 1; this.save(); }
-      this.log('error', `退租实例 ${id} 失败：${e.message}（下次检查会重试）`);
+      if (m) {
+        m.destroyFails = (m.destroyFails || 0) + 1;
+        m.lastDestroyError = String(e.message || '').slice(0, 180);
+        m.destroyRetryAfter = m.destroyFails >= 3 ? Date.now() + 5 * MIN : 0;
+        this.save();
+      }
+      this.log('error', `退租实例 ${id} 失败：${e.message}（账本保留，失败 ${m?.destroyFails || 1} 次）`);
       throw e;
     } finally { this.busy.delete(id); }
   }
@@ -2127,7 +2186,7 @@ export class Engine {
     const profitHr = spendHr == null ? null : revenueHr - spendHr;
     const holds = this.openHolds();
     return {
-      count: active.length + extra.slots, mining: active.filter(x => x.phase === 'mining' || x.phase === 'loss').length,
+      count: active.length + extra.slots + list.filter(x => x.managed && x.costKnown === false && !(ACTIVE.has(x.status) || x.phase === 'booting')).length, mining: active.filter(x => x.phase === 'mining' || x.phase === 'loss').length,
       abnormal: list.filter(x => ['low', 'gpu'].includes(x.health) || ['nohash', 'offline'].includes(x.phase)).length,
       estimatedCount: estimated.length,
       spendHr, knownSpendHr: knownSpend, unknownCostCount: unknownCount, costState,
@@ -2173,6 +2232,63 @@ export class Engine {
     });
   }
 
+  attention(list = this.instances()) {
+    const unknownPrice = list.filter(x => x.managed && x.costKnown === false).map(x => ({
+      id: x.id, gpuName: x.gpuName, numGpus: x.numGpus, orderToken: this.st.managed[x.id]?.orderToken || null,
+      reason: '认得出是本程序的机器，但没有留下出价。费用按未知占用，不会按亏损退租。补录每小时费用后可以恢复新租，不必先销毁。',
+    }));
+    const destroyStuck = Object.entries(this.st.managed || {}).filter(([, m]) => (m?.destroyFails || 0) > 0).map(([id, m]) => ({
+      id, fails: m.destroyFails, error: m.lastDestroyError || '', retryAfter: m.destroyRetryAfter || 0,
+      listed: (this.rawInstances || []).some(i => String(i.id) === String(id)),
+      reason: '销毁回包不能当成成功，账本仍占额。这不是实网核对过的契约。实例不在列表里时，可以确认停止计入。',
+    }));
+    return { unknownPrice, destroyStuck };
+  }
+
+  async setInstancePrice(id, { dph, bid, rentMode, confirm } = {}) {
+    if (confirm !== true) throw new Error('补录费用需要显式确认');
+    const key = this.orderKey(id);
+    if (!key) throw new Error('实例编号无效');
+    const row = this.ownManaged(key);
+    if (!row) throw new Error('这台还没被认领。没有本地身份记录时，不能只凭标签前缀自动认领');
+    const price = finiteNum(dph);
+    const b = finiteNum(bid);
+    if (!(price > 0) && !(b > 0)) throw new Error('请填写大于 0 的每小时合计或出价');
+    if (rentMode === 'interruptible' || rentMode === 'ondemand') row.rentMode = rentMode;
+    if (price > 0) row.dph = price;
+    if (b > 0) row.bid = b;
+    else if (!(finiteNum(row.bid) > 0) && price > 0 && row.rentMode === 'interruptible') row.bid = price;
+    delete row.restoredWithoutPrice;
+    if (row.orderToken) this.noteIssued(row.orderToken, row);
+    this.save();
+    this.log('warn', `已为实例 ${key} 补录费用 $${Number(row.dph || row.bid).toFixed(4)}/h。这是手工填写，不是从 vast 读回的`);
+    return { ok: true, id: key, dph: row.dph ?? null, bid: row.bid ?? null, rentMode: row.rentMode || null };
+  }
+
+  async claimInstance(id, { dph, bid, rentMode, confirm } = {}) {
+    if (confirm !== true) throw new Error('手工认领需要显式确认。升级前没有本地身份记录的机器不会自动认领');
+    const key = this.orderKey(id);
+    if (!key) throw new Error('实例编号无效');
+    if (this.ownManaged(key)) return this.setInstancePrice(key, { dph, bid, rentMode, confirm: true });
+    const inst = (this.rawInstances || []).find(i => String(i.id) === key);
+    if (!inst) throw new Error('列表里没有这台实例，不能凭前缀补认');
+    const price = finiteNum(dph);
+    const b = finiteNum(bid);
+    if (!(price > 0) && !(b > 0)) throw new Error('手工认领必须填写大于 0 的每小时费用，不能猜按需价');
+    const mode = rentMode === 'ondemand' ? 'ondemand' : 'interruptible';
+    const tok = (String(inst.label || '').match(/\btok=([A-Za-z0-9]+)/) || [])[1] || null;
+    this.st.managed[key] = {
+      rentedAt: inst.start_date ? inst.start_date * 1000 : Date.now(),
+      gpuName: inst.gpu_name || '', numGpus: inst.num_gpus || 1, machineId: inst.machine_id ?? null,
+      dph: price > 0 ? price : b, bid: b > 0 ? b : (mode === 'interruptible' ? price : null),
+      rentMode: mode, orderToken: tok, seenInList: true, seenAt: Date.now(), claimedManually: true,
+    };
+    if (tok) this.noteIssued(tok, this.st.managed[key]);
+    this.save();
+    this.log('warn', `已手工认领实例 ${key}。这不会把其他只有相近前缀的机器自动算进来`);
+    return { ok: true, id: key, claimed: true, dph: this.st.managed[key].dph };
+  }
+
   snapshot() {
     this.repriceOffers();
     const list = this.instances();
@@ -2196,6 +2312,7 @@ export class Engine {
       summary: this.summary(list),
       budget: this.budget(list),
       orders: this.ordersView(),
+      attention: this.attention(list),
       preflight: this.preflight(),
       instances: list,
       offers: this.offers.slice(0, 80),
