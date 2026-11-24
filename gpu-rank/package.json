@@ -1,0 +1,17 @@
+{
+  "name": "gpu-rank",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only comparable-cost ranking for GPU rental quotes. Does not rent, deploy, pay, or read API keys.",
+  "bin": {
+    "gpu-rank": "./cli.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,3 @@
+out/
+snapshots/tmp/
+snapshots/public/*.body

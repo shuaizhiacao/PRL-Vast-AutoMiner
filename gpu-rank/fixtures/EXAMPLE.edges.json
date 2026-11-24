@@ -1,0 +1,2025 @@
+{
+  "schemaVersion": "gpu-rank.input.v1",
+  "dataset": {
+    "id": "example-edges",
+    "kind": "example",
+    "label": "EXAMPLE — not a live market ranking",
+    "collectedAt": "2026-11-24T11:30:00.000Z",
+    "sourceUrls": [
+      "https://example.invalid/fixture/comparable"
+    ]
+  },
+  "asOf": "2026-11-24T12:00:00.000Z",
+  "workload": {
+    "modelId": "example/model",
+    "revision": "rev-example-1",
+    "precision": "fp16",
+    "inputTokens": 512,
+    "outputTokens": 128,
+    "batchSize": 1,
+    "concurrency": 1,
+    "maxLatencyMs": 2000,
+    "metric": "output_tokens_per_second"
+  },
+  "baselines": [
+    {
+      "id": "h100-sxm-80-hbm3",
+      "gpu": {
+        "model": "H100",
+        "formFactor": "SXM",
+        "vramGb": 80,
+        "memoryGeneration": "HBM3"
+      },
+      "gpuCount": 1,
+      "throughput": 1000,
+      "throughputScope": "whole_machine",
+      "metric": "output_tokens_per_second",
+      "workload": {
+        "modelId": "example/model",
+        "revision": "rev-example-1",
+        "precision": "fp16",
+        "inputTokens": 512,
+        "outputTokens": 128,
+        "batchSize": 1,
+        "concurrency": 1,
+        "maxLatencyMs": 2000,
+        "metric": "output_tokens_per_second"
+      },
+      "latencyMs": 400,
+      "sourceUrl": "https://example.invalid/bench/h100-sxm-80-hbm3",
+      "collectedAt": "2026-11-24T10:00:00.000Z",
+      "evidence": "EXAMPLE whole-machine measurement for this fixture"
+    },
+    {
+      "id": "h100-pcie-80-hbm2e",
+      "gpu": {
+        "model": "H100",
+        "formFactor": "PCIe",
+        "vramGb": 80,
+        "memoryGeneration": "HBM2e"
+      },
+      "gpuCount": 1,
+      "throughput": 1000,
+      "throughputScope": "whole_machine",
+      "metric": "output_tokens_per_second",
+      "workload": {
+        "modelId": "example/model",
+        "revision": "rev-example-1",
+        "precision": "fp16",
+        "inputTokens": 512,
+        "outputTokens": 128,
+        "batchSize": 1,
+        "concurrency": 1,
+        "maxLatencyMs": 2000,
+        "metric": "output_tokens_per_second"
+      },
+      "latencyMs": 400,
+      "sourceUrl": "https://example.invalid/bench/h100-pcie-80-hbm2e",
+      "collectedAt": "2026-11-24T10:00:00.000Z",
+      "evidence": "EXAMPLE whole-machine measurement for this fixture"
+    }
+  ],
+  "requirements": {
+    "vram": {
+      "mode": "min_gb_per_gpu",
+      "minGb": 24
+    },
+    "backend": {
+      "mode": "allowlist",
+      "names": [
+        "vllm"
+      ]
+    },
+    "network": {
+      "mode": "min_mbps",
+      "downMbps": 100,
+      "upMbps": 50
+    },
+    "disk": {
+      "mode": "min_gb",
+      "minGb": 100
+    }
+  },
+  "maxAgeSeconds": 86400,
+  "fx": [
+    {
+      "base": "CLORE-Blockchain",
+      "quote": "USD",
+      "rate": 0.25,
+      "sourceUrl": "https://example.invalid/fx/clore",
+      "asOf": "2026-11-24T11:30:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z"
+    }
+  ],
+  "offers": [
+    {
+      "id": "ex-per-gpu",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "per_gpu",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-unknown-fee",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": false,
+        "feesCompleteEvidence": "",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": false,
+            "amount": null,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": ""
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-expired",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T11:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-dup",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-dup",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-dup-b",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-zero-tp",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 0,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-negative-tp",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": -5,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-unavailable",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": false,
+      "availabilityEvidence": "EXAMPLE rented",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-vram-unknown",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": null,
+        "vramScope": "per_gpu",
+        "vramEvidence": ""
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-no-bench",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-theory",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "theoretical",
+          "throughput": 900,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3",
+          "citationUrl": "https://example.invalid/papers/theory",
+          "citationQuote": "EXAMPLE cited proxy, not a measurement of this machine"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-scaled",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 400,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 1,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-net-unknown",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": null,
+        "upMbps": null,
+        "evidence": ""
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-clore-conflict",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 1,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 240,
+        "quoteCurrency": "CLORE-Blockchain",
+        "paymentCurrency": "CLORE-Blockchain",
+        "period": "day",
+        "periodEvidence": "EXAMPLE period day",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 240,
+            "currency": "CLORE-Blockchain",
+            "period": "day",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0,
+            "currency": "CLORE-Blockchain",
+            "period": "day",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0,
+            "currency": "CLORE-Blockchain",
+            "period": "day",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0,
+            "currency": "CLORE-Blockchain",
+            "period": "day",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        },
+        "billingUnitConflict": true,
+        "documentationConflicts": [
+          {
+            "field": "price.usd.on_demand_clore",
+            "period": "hour",
+            "amount": 2
+          }
+        ],
+        "decoyUsdBlockchainPerDay": 48
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 1000,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 1,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 800,
+          "sourceUrl": "https://example.invalid/bench/ex-clore-conflict",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-usd-blockchain",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD-Blockchain",
+        "paymentCurrency": "USD-Blockchain",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD-Blockchain",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD-Blockchain",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD-Blockchain",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD-Blockchain",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-slow-net",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 10,
+        "upMbps": 10,
+        "evidence": "EXAMPLE quoted"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": true,
+        "evidence": "EXAMPLE image contains vllm"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "id": "ex-backend-no",
+      "marketplace": "example",
+      "sourceUrl": "https://example.invalid/offer/ex-a",
+      "collectedAt": "2026-11-24T11:00:00.000Z",
+      "expiresAt": "2026-11-24T18:00:00.000Z",
+      "available": true,
+      "availabilityEvidence": "EXAMPLE available",
+      "gpu": {
+        "count": 2,
+        "model": "RTX 4090",
+        "vramGbEach": 24,
+        "vramScope": "per_gpu",
+        "vramEvidence": "EXAMPLE 24GB per GPU"
+      },
+      "diskGb": 200,
+      "diskEvidence": "EXAMPLE disk",
+      "network": {
+        "downMbps": 1000,
+        "upMbps": 500,
+        "evidence": "EXAMPLE quoted bandwidth"
+      },
+      "backend": {
+        "name": "vllm",
+        "compatible": false,
+        "evidence": "EXAMPLE rejected by image"
+      },
+      "quote": {
+        "priceUnit": "whole_machine",
+        "amount": 2.5,
+        "quoteCurrency": "USD",
+        "paymentCurrency": "USD",
+        "period": "hour",
+        "periodEvidence": "EXAMPLE period hour",
+        "feesComplete": true,
+        "feesCompleteEvidence": "EXAMPLE these four components are the entire charge",
+        "components": {
+          "compute": {
+            "known": true,
+            "amount": 2,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE compute"
+          },
+          "storage": {
+            "known": true,
+            "amount": 0.25,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE storage"
+          },
+          "bandwidth": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE bandwidth"
+          },
+          "platformFee": {
+            "known": true,
+            "amount": 0.125,
+            "currency": "USD",
+            "period": "hour",
+            "unit": "whole_machine",
+            "evidence": "EXAMPLE platform fee"
+          }
+        }
+      },
+      "benchmarks": [
+        {
+          "kind": "measured",
+          "throughput": 800,
+          "throughputScope": "whole_machine",
+          "gpuCountAtMeasurement": 2,
+          "metric": "output_tokens_per_second",
+          "workload": {
+            "modelId": "example/model",
+            "revision": "rev-example-1",
+            "precision": "fp16",
+            "inputTokens": 512,
+            "outputTokens": 128,
+            "batchSize": 1,
+            "concurrency": 1,
+            "maxLatencyMs": 2000,
+            "metric": "output_tokens_per_second"
+          },
+          "latencyMs": 900,
+          "sourceUrl": "https://example.invalid/bench/ex-a",
+          "collectedAt": "2026-11-24T10:30:00.000Z",
+          "baselineId": "h100-sxm-80-hbm3"
+        }
+      ],
+      "ops": {
+        "migrationDownload": {
+          "status": "unknown"
+        },
+        "overlapRent": {
+          "status": "unknown"
+        },
+        "drain": {
+          "status": "unknown"
+        },
+        "stability": {
+          "status": "unknown"
+        },
+        "leaseCooldown": {
+          "status": "unknown"
+        }
+      }
+    }
+  ]
+}

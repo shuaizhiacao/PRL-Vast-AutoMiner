@@ -1,0 +1,138 @@
+{
+  "schemaVersion": "gpu-rank.fetch.v1",
+  "collectedAt": "2026-11-24T13:38:32.995Z",
+  "optimalMachineSelected": false,
+  "rankedIsMarketOptimum": false,
+  "authHeadersSent": false,
+  "keysRead": false,
+  "methods": [
+    "GET"
+  ],
+  "vastOfferSearch": "not called; official docs show POST /api/v0/bundles/ with a bearer credential",
+  "results": [
+    {
+      "id": "clore-marketplace",
+      "url": "https://api.clore.ai/v1/marketplace",
+      "role": "market",
+      "note": "Documented GET. The host API marks the auth header mandatory. This client sends no auth header and no key.",
+      "method": "GET",
+      "status": 200,
+      "bytes": 3922137,
+      "truncated": false,
+      "sha256": "d088225dea8be2f196e786f7aca452ef9bb8b9b697277c8005c425bd9b86de27",
+      "followedRedirect": false,
+      "location": null,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "date": "Tue, 24 Nov 2026 13:38:33 GMT",
+        "etag": "W/\"3bd8d9-E5nGIbvY/keKOFsoLOm4c8M729I\""
+      },
+      "normalized": {
+        "parsed": true,
+        "note": "Each on_demand currency is a separate payment currency. USD-Blockchain is not applied to a CLORE payment. price.usd is ignored.",
+        "summary": {
+          "offerCount": 7144,
+          "currencies": {
+            "bitcoin": 2220,
+            "CLORE-Blockchain": 2183,
+            "USD-Blockchain": 2741
+          },
+          "billingUnitConflict": 7144,
+          "feesCompleteTrue": 0,
+          "periodSet": 0,
+          "availableTrue": 0,
+          "priceUnit": {
+            "whole_machine": 0,
+            "per_gpu": 0,
+            "unknown": 7144
+          },
+          "ranked": false
+        },
+        "ranked": false,
+        "gap": "Normalized quotes have no same-condition benchmark and a billing-unit conflict. They are not ranked."
+      },
+      "gap": "Normalized quotes have no same-condition benchmark and a billing-unit conflict. They are not ranked."
+    },
+    {
+      "id": "clore-host-api-doc",
+      "url": "https://docs.clore.ai/for-hosts/api",
+      "role": "documentation",
+      "note": "Host API: price.on_demand is an on-demand price per day. renter_fees and creation_fees are separate.",
+      "method": "GET",
+      "status": 200,
+      "bytes": 2338621,
+      "truncated": false,
+      "sha256": "fca05e7135ad15411a9bc8fc86940af92c8b853879e29afe89faacc72f39292a",
+      "followedRedirect": false,
+      "location": null,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "date": "Tue, 24 Nov 2026 13:38:33 GMT",
+        "etag": "W/\"f5j277glii1e4di\""
+      }
+    },
+    {
+      "id": "clore-dev-api-reference",
+      "url": "https://docs.clore.ai/dev/reference/api-reference",
+      "role": "documentation",
+      "note": "Developer reference. Checked for conflicts with the host API period and currency fields.",
+      "method": "GET",
+      "status": 200,
+      "bytes": 652346,
+      "truncated": false,
+      "sha256": "3ccedaffac67ce99c9834d60bdff04681887d49b6f2b0f23960e751f5b846076",
+      "followedRedirect": false,
+      "location": null,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "date": "Tue, 24 Nov 2026 13:38:33 GMT",
+        "etag": "W/\"thylo8iipqdzbk\""
+      }
+    },
+    {
+      "id": "clore-client-reference",
+      "url": "https://docs.clore.ai/dev/reference/clore-client",
+      "role": "documentation",
+      "note": "Client reference describes price.usd.on_demand_clore as USD per hour. That field is not used.",
+      "method": "GET",
+      "status": 200,
+      "bytes": 853118,
+      "truncated": false,
+      "sha256": "a55f55c6995ec328bd7e3a6cbccc6111090bc0b38c242276c4df0856e0680e3a",
+      "followedRedirect": false,
+      "location": null,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "date": "Tue, 24 Nov 2026 13:38:33 GMT",
+        "etag": "W/\"1w8av2sr1kia50\""
+      }
+    },
+    {
+      "id": "vast-hello-world-doc",
+      "url": "https://docs.vast.ai/api-reference/hello-world",
+      "role": "documentation",
+      "note": "Official lifecycle page. Search is POST with a bearer key. This client does not call it.",
+      "method": "GET",
+      "status": 200,
+      "bytes": 244548,
+      "truncated": false,
+      "sha256": "5ede5d0e43fa74f5f84f2c592c4be16a1680c859eaa3d1765b3cc26c9e321d44",
+      "followedRedirect": false,
+      "location": null,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "date": "Tue, 24 Nov 2026 13:38:34 GMT",
+        "last-modified": "Mon, 23 Nov 2026 22:30:02 GMT"
+      }
+    }
+  ],
+  "gaps": [
+    "clore-marketplace: HTTP 200 without a credential, which the host API page still describes as requiring an auth header. Bodies are snapshots, not a ranking.",
+    "No same-condition H100 benchmark was supplied with the public payload, so no candidate is ranked.",
+    "Clore on_demand period conflicts across official pages, so normalized quotes keep billingUnitConflict=true.",
+    "renter_fees and creation_fees were not fetched because that documented GET requires an auth header.",
+    "Vast offer search was not called. The official hello-world documents POST /api/v0/bundles/ with a bearer credential."
+  ],
+  "disclaimer": "These records describe source snapshots. Example fixtures are not market rankings. Nothing here selects an optimal machine.",
+  "realSnapshotCheck": "snapshots/public/real-snapshot-check.json"
+}
