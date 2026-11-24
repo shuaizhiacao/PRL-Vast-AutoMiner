@@ -1,0 +1,12 @@
+{
+  "network": "devnet",
+  "sponsor": {
+    "miner": {
+      "status": "open",
+      "capacity": { "used": 1, "max": 1024 },
+      "dailyNewSponsorships": { "used": 0, "limit": 1000 },
+      "dailyStakeBudget": { "usedFlop": "0", "limitFlop": "100" },
+      "automatic": { "open": false, "uncalibrated": 0, "max": 200, "graceHours": 4 }
+    }
+  }
+}
