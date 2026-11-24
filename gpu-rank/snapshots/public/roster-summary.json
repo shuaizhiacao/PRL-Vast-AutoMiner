@@ -1,0 +1,21 @@
+{
+  "machines": 2842,
+  "currencyQuotes": 7144,
+  "ranked": 0,
+  "pending": 3875,
+  "excluded": 3269,
+  "rejected": 0,
+  "groups": 0,
+  "optimalMachineSelected": false,
+  "vendorGuaranteesAvailability": false,
+  "gaps": [
+    "no same-condition H100 measurement is included",
+    "fee schedule is not in the marketplace payload",
+    "FX is not included",
+    "vendor expiresAt is absent",
+    "local observation TTL is 3600s and is not a vendor availability guarantee",
+    "pre-rent recheck required",
+    "Vast offers were not fetched",
+    "placeholder workload not-supplied matches no measurement and produces no equivalent-H100 board"
+  ]
+}

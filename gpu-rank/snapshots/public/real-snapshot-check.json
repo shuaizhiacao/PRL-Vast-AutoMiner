@@ -1,0 +1,104 @@
+{
+  "collectedAt": "2026-11-24T13:38:32.995Z",
+  "httpStatus": 200,
+  "credentialSent": false,
+  "responseCode": 0,
+  "serverCount": 2842,
+  "myServersCount": 0,
+  "summary": {
+    "offerCount": 7144,
+    "currencies": {
+      "bitcoin": 2220,
+      "CLORE-Blockchain": 2183,
+      "USD-Blockchain": 2741
+    },
+    "billingUnitConflict": 7144,
+    "feesCompleteTrue": 0,
+    "periodSet": 0,
+    "availableTrue": 0,
+    "priceUnit": {
+      "whole_machine": 0,
+      "per_gpu": 0,
+      "unknown": 7144
+    },
+    "ranked": false
+  },
+  "rank": {
+    "ok": true,
+    "groups": 0,
+    "ranked": 0,
+    "pending": 0,
+    "excluded": 0,
+    "rejected": 7144,
+    "optimalMachineSelected": false,
+    "reasons": {
+      "invalid_timestamp": 7144,
+      "availability_unknown": 3875,
+      "vram_scope_unknown": 7144,
+      "backend_unknown": 7144,
+      "network_unknown": 7144,
+      "disk_unknown": 7144,
+      "price_unit_unknown": 7144,
+      "billing_unit_conflict": 7144,
+      "billing_period_unknown": 7144,
+      "component_unknown": 7144,
+      "fee_schedule_incomplete": 7144,
+      "fx_missing": 7144,
+      "missing_comparable_benchmark": 7144,
+      "unavailable": 3269
+    }
+  },
+  "partialGpuRental": {
+    "false": 1368,
+    "object": 1474,
+    "other": 0
+  },
+  "usdBlockchainEqualsPriceUsdOnDemandClore": {
+    "compared": 2085,
+    "equal": 0
+  },
+  "cloreAmountDiffersFromUsdBlockchain": {
+    "pairs": 2085,
+    "differs": 2085
+  },
+  "files": {
+    "clore-marketplace": {
+      "bytes": 3922137,
+      "sha256": "d088225dea8be2f196e786f7aca452ef9bb8b9b697277c8005c425bd9b86de27"
+    },
+    "clore-host-api-doc": {
+      "bytes": 2338621,
+      "sha256": "fca05e7135ad15411a9bc8fc86940af92c8b853879e29afe89faacc72f39292a"
+    },
+    "clore-dev-api-reference": {
+      "bytes": 652346,
+      "sha256": "3ccedaffac67ce99c9834d60bdff04681887d49b6f2b0f23960e751f5b846076"
+    },
+    "clore-client-reference": {
+      "bytes": 853118,
+      "sha256": "a55f55c6995ec328bd7e3a6cbccc6111090bc0b38c242276c4df0856e0680e3a"
+    },
+    "vast-hello-world-doc": {
+      "bytes": 244548,
+      "sha256": "5ede5d0e43fa74f5f84f2c592c4be16a1680c859eaa3d1765b3cc26c9e321d44"
+    }
+  },
+  "fxUsed": [],
+  "rented": {
+    "true": 1340,
+    "false": 1502,
+    "other": 0
+  },
+  "usdFieldRatioClientOverOnDemand": {
+    "compared": 2085,
+    "min": 0.09465135177852811,
+    "p50": 1.000228159919596,
+    "p90": 1.1252566799095454,
+    "max": 23.31314083214978,
+    "near1": 1468,
+    "near24": 0,
+    "near1over24": 0
+  },
+  "note": "Example FX from fixtures was not applied. No offer was ranked.",
+  "priceUnitPolicy": "Clore priceUnit is always null. partial_gpu_rental false is not inferred as whole_machine."
+}
