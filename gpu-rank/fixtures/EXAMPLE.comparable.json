@@ -19,11 +19,18 @@
     "batchSize": 1,
     "concurrency": 1,
     "maxLatencyMs": 2000,
-    "metric": "output_tokens_per_second"
+    "metric": "output_tokens_per_second",
+    "protocol": {
+      "id": "example-protocol-v1",
+      "latencyStatistic": "e2e_p99",
+      "engine": "vllm-example",
+      "engineIdentity": "must_match"
+    }
   },
   "baselines": [
     {
       "id": "h100-sxm-80-hbm3",
+      "kind": "measured",
       "gpu": {
         "model": "H100",
         "formFactor": "SXM",
@@ -43,8 +50,21 @@
         "batchSize": 1,
         "concurrency": 1,
         "maxLatencyMs": 2000,
-        "metric": "output_tokens_per_second"
+        "metric": "output_tokens_per_second",
+        "protocol": {
+          "id": "example-protocol-v1",
+          "latencyStatistic": "e2e_p99",
+          "engine": "vllm-example",
+          "engineIdentity": "must_match"
+        }
       },
+      "protocol": {
+        "id": "example-protocol-v1",
+        "latencyStatistic": "e2e_p99",
+        "engine": "vllm-example",
+        "engineIdentity": "must_match"
+      },
+      "machineFingerprint": "example-baseline:h100-sxm-80-hbm3",
       "latencyMs": 400,
       "sourceUrl": "https://example.invalid/bench/h100-sxm-80-hbm3",
       "collectedAt": "2026-11-24T10:00:00.000Z",
@@ -52,6 +72,7 @@
     },
     {
       "id": "h100-pcie-80-hbm2e",
+      "kind": "measured",
       "gpu": {
         "model": "H100",
         "formFactor": "PCIe",
@@ -71,8 +92,21 @@
         "batchSize": 1,
         "concurrency": 1,
         "maxLatencyMs": 2000,
-        "metric": "output_tokens_per_second"
+        "metric": "output_tokens_per_second",
+        "protocol": {
+          "id": "example-protocol-v1",
+          "latencyStatistic": "e2e_p99",
+          "engine": "vllm-example",
+          "engineIdentity": "must_match"
+        }
       },
+      "protocol": {
+        "id": "example-protocol-v1",
+        "latencyStatistic": "e2e_p99",
+        "engine": "vllm-example",
+        "engineIdentity": "must_match"
+      },
+      "machineFingerprint": "example-baseline:h100-pcie-80-hbm2e",
       "latencyMs": 400,
       "sourceUrl": "https://example.invalid/bench/h100-pcie-80-hbm2e",
       "collectedAt": "2026-11-24T10:00:00.000Z",
@@ -120,6 +154,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -189,6 +224,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -199,12 +238,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -233,6 +285,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-b",
       "gpu": {
         "count": 1,
         "model": "RTX 4090",
@@ -302,6 +355,10 @@
           "throughput": 500,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 1,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-b",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -312,12 +369,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 700,
           "sourceUrl": "https://example.invalid/bench/ex-b",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-b"
         }
       ],
       "ops": {
@@ -346,6 +416,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-clore",
       "gpu": {
         "count": 1,
         "model": "RTX 4090",
@@ -415,6 +486,10 @@
           "throughput": 1000,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 1,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-clore",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -425,12 +500,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 800,
           "sourceUrl": "https://example.invalid/bench/ex-clore",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-clore"
         }
       ],
       "ops": {
@@ -459,6 +547,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-pcie",
       "gpu": {
         "count": 1,
         "model": "L40S",
@@ -528,6 +617,10 @@
           "throughput": 250,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 1,
+          "gpuModelAtMeasurement": "L40S",
+          "vramGbEachAtMeasurement": 48,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-pcie",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -538,12 +631,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 1100,
           "sourceUrl": "https://example.invalid/bench/ex-pcie",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-pcie-80-hbm2e"
+          "baselineId": "h100-pcie-80-hbm2e",
+          "offerId": "ex-pcie"
         }
       ],
       "ops": {

@@ -74,7 +74,7 @@ test('a marketplace 200 is summarized and not embedded as rankable offers', asyn
   assert.equal(market.normalized.summary.offerCount, 2);
   assert.equal(market.normalized.summary.ranked, false);
   assert.equal(market.normalized.summary.feesCompleteTrue, 0);
-  assert.equal(market.normalized.summary.billingUnitConflict, 2);
+  assert.equal(market.normalized.summary.billingUnitConflict, 0);
   assert.equal(Object.hasOwn(market.normalized, 'offers'), false);
   assert.equal(manifest.optimalMachineSelected, false);
 });

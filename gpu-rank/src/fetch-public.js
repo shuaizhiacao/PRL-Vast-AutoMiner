@@ -2,18 +2,18 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PUBLIC_GETS } from './allowlist.js';
-import { cloreMarketplaceOffers } from './adapters/clore.js';
+import { candidatesFromCloreBody } from './candidates.js';
 import { publicGet } from './http.js';
 
-export async function fetchPublicSnapshots(outDir, { fetchImpl, now = new Date() } = {}) {
+export async function fetchPublicSnapshots(outDir, { fetchImpl, now = new Date(), timeoutMs, byteCap, ttlSeconds = null } = {}) {
   await mkdir(outDir, { recursive: true });
   const collectedAt = now.toISOString();
   const results = [];
   for (const target of PUBLIC_GETS) {
     const item = { id: target.id, url: target.url, role: target.role, note: target.note, method: 'GET' };
     try {
-      const response = await publicGet(target.url, { fetchImpl });
-      const sha256 = createHash('sha256').update(response.body).digest('hex');
+      const response = await publicGet(target.url, { fetchImpl, timeoutMs, byteCap });
+      const sha256 = response.sha256 || createHash('sha256').update(response.body).digest('hex');
       const file = path.join(outDir, `${target.id}.body`);
       await writeFile(file, response.body);
       item.status = response.status;
@@ -25,7 +25,7 @@ export async function fetchPublicSnapshots(outDir, { fetchImpl, now = new Date()
       item.headers = response.headers;
       item.file = file;
       if (target.id === 'clore-marketplace' && response.status === 200 && !response.truncated) {
-        item.normalized = normalizeMarketplace(response.body, target.url, collectedAt);
+        item.normalized = await writeCandidates(outDir, response.body, target.url, collectedAt, ttlSeconds);
         item.gap = item.normalized.gap;
       } else if (target.id === 'clore-marketplace') {
         item.normalized = null;
@@ -54,27 +54,27 @@ export async function fetchPublicSnapshots(outDir, { fetchImpl, now = new Date()
   if (!manifest.gaps.length) {
     manifest.gaps.push('No same-condition H100 benchmark was supplied with the public payload, so no candidate is ranked.');
   }
-  manifest.gaps.push('Clore on_demand period conflicts across official pages, so normalized quotes keep billingUnitConflict=true.');
+  manifest.gaps.push('price.on_demand is kept as the host-documented per-day field. price.usd is a different field and is not used. Fees and FX are still unknown, so nothing is ranked.');
   manifest.gaps.push('renter_fees and creation_fees were not fetched because that documented GET requires an auth header.');
   await writeFile(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
   return manifest;
 }
 
-function normalizeMarketplace(body, sourceUrl, collectedAt) {
+async function writeCandidates(outDir, body, sourceUrl, collectedAt, ttlSeconds) {
   let payload;
   try { payload = JSON.parse(body); } catch {
     return { parsed: false, offers: [], gap: 'marketplace body was not JSON' };
   }
-  const normalized = cloreMarketplaceOffers(payload, {
-    sourceUrl,
-    collectedAt,
-    expiresAt: null,
-  });
+  const candidates = candidatesFromCloreBody(payload, { sourceUrl, collectedAt, asOf: collectedAt, ttlSeconds });
+  const file = path.join(outDir, 'candidates.json');
+  await writeFile(file, JSON.stringify(candidates));
   return {
     parsed: true,
-    note: normalized.note,
-    summary: normalized.summary,
+    note: 'Each on_demand currency is a separate payment currency. price.usd is ignored. Candidates are unranked.',
+    summary: { ...candidates.summary, offerCount: candidates.offers.length },
+    candidatesFile: file,
     ranked: false,
-    gap: 'Normalized quotes have no same-condition benchmark and a billing-unit conflict. They are not ranked.',
+    vendorGuaranteesAvailability: false,
+    gap: 'Candidates were written with unknown fees, FX, and benchmarks. No equivalent-H100 board was produced.',
   };
 }

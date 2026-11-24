@@ -32,6 +32,11 @@ export function quoteAllIn(quote, { fx, asOfMs }) {
   if (quote.feesComplete !== true || typeof quote.feesCompleteEvidence !== 'string' || !quote.feesCompleteEvidence.trim()) {
     pending.push('fee_schedule_incomplete');
   }
+  if (parts != null && headline != null && Math.abs(headline - parts) > 1e-6) {
+    if (typeof quote.headlineDifferenceEvidence !== 'string' || !quote.headlineDifferenceEvidence.trim()) {
+      pending.push('headline_components_mismatch');
+    } else notes.push('headline_differs_from_components');
+  }
   const rate = usdRate(quote.paymentCurrency, fx, asOfMs, pending);
   if (pending.length || rejected.length || hours == null || parts == null || rate == null) {
     return { ok: false, pending, rejected, notes, allInUsdPerHour: null, hours, paymentPerPeriod: parts, usdPerPayment: rate };

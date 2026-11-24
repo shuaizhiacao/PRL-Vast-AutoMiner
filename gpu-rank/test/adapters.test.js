@@ -30,8 +30,9 @@ test('Clore currencies stay separate and price.usd is not an hourly USD price', 
   assert.equal(clore.quote.amount, 240);
   assert.equal(clore.quote.quoteCurrency, 'CLORE-Blockchain');
   assert.notEqual(clore.quote.amount, 48);
-  assert.equal(clore.quote.period, null);
-  assert.equal(clore.quote.billingUnitConflict, true);
+  assert.equal(clore.quote.period, 'day');
+  assert.match(clore.quote.periodEvidence, /price\.on_demand/);
+  assert.equal(clore.quote.billingUnitConflict, false);
   assert.equal(clore.quote.components.platformFee.known, false);
   assert.equal(clore.quote.components.platformFee.amount, null);
   assert.equal(clore.quote.feesComplete, false);

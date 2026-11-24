@@ -23,7 +23,7 @@ export function reportText(report) {
     const b = group.baseline;
     lines.push(`可比组 ${i + 1}: baseline ${b.id} ${b.formFactor} ${b.vramGb}GB ${b.memoryGeneration}；本组 ${group.rows.length} 条，只在组内排序。`);
     for (const row of group.rows) {
-      lines.push(`  ${row.rank}. ${row.offerId}  USD/等效H100小时=${fmt(row.usdPerEqH100Hour)}  等效H100=${fmt(row.eqH100)}  全包USD/h=${fmt(row.allInUsdPerHour)}  支付=${row.paymentCurrency}  采集=${row.collectedAt}`);
+      lines.push(`  ${row.rank}. ${row.offerId}  单位=${row.equivalenceUnit}  基准卡数=${row.baselineGpuCount}  USD/等效基准小时=${fmt(row.usdPerEqBaselineHour)}  等效基准=${fmt(row.eqBaseline)}  单卡等效H100=${fmt(row.eqH100)}  全包USD/h=${fmt(row.allInUsdPerHour)}  支付=${row.paymentCurrency}  有效性=${row.validitySource}  供应商保证可租=false  租前=${row.preRentStatus}  采集=${row.collectedAt}`);
     }
   }
   if (report.theoreticalBoards?.length) {
@@ -63,8 +63,10 @@ function fmt(n) {
 
 const CSV_COLUMNS = [
   'status', 'board', 'groupKey', 'rank', 'offerId', 'marketplace', 'collectedAt', 'expiresAt',
+  'validitySource', 'vendorGuaranteesAvailability', 'preRentStatus',
   'quoteCurrency', 'paymentCurrency', 'priceUnit', 'period', 'rawAmount', 'allInUsdPerHour',
-  'throughput', 'throughputScope', 'gpuCount', 'gpuModel', 'baselineId', 'eqH100', 'usdPerEqH100Hour',
+  'throughput', 'throughputScope', 'gpuCount', 'gpuModel', 'baselineId', 'baselineGpuCount', 'equivalenceUnit',
+  'eqBaseline', 'usdPerEqBaselineHour', 'eqH100', 'usdPerEqH100Hour',
   'reasons', 'opsMigration', 'opsOverlap', 'opsDrain', 'opsStability', 'opsLease', 'sourceUrl',
 ];
 
@@ -105,8 +107,8 @@ function csvValue(col, row, groupKey) {
 
 function csvCell(v) {
   if (v == null) return '';
-  let s = String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-  if (/[",\n]/.test(s)) s = `"${s.replace(/"/g, '""')}"`;
+  let s = String(v).replace(/\u0000/g, '');
+  if (/^[\s\u0000-\u001F]*[=+\-@]/.test(s)) s = `'${s}`;
+  if (/[",\n\r]/.test(s)) s = `"${s.replace(/"/g, '""')}"`;
   return s;
 }

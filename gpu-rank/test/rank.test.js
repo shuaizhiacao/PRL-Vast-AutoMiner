@@ -51,7 +51,7 @@ test('edge fixture rejects bad throughput, blocks invented CLORE conversion, and
   assert.equal(byId['ex-unknown-fee'].allInUsdPerHour, null);
   assert.ok(byId['ex-unknown-fee'].allReasons.some(r => r.code === 'fee_schedule_incomplete' || r.code === 'component_unknown'));
   assert.equal(byId['ex-expired'].status, 'rejected');
-  assert.ok(byId['ex-expired'].allReasons.some(r => r.code === 'expired'));
+  assert.ok(byId['ex-expired'].allReasons.some(r => r.code === 'vendor_expired'));
   assert.equal(byId['ex-dup'].status, 'rejected');
   assert.ok(byId['ex-dup'].allReasons.some(r => r.code === 'duplicate_id'));
   assert.equal(report.rejected.filter(r => r.offerId === 'ex-dup').length, 2);

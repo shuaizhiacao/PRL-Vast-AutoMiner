@@ -1,23 +1,15 @@
 // Normalizes a Clore marketplace payload into audit offers.
-// It does not divide by 24 and does not read price.usd.
-// Host docs say price.on_demand is per day. The client reference says
-// price.usd.on_demand_clore is USD per hour and its example uses the same number.
-// That conflict blocks ranking; the raw amount is kept.
+// price.on_demand[currency] is recorded as per day because the host API says that
+// for this field. price.usd.on_demand_clore is a different field and is ignored.
+// The two descriptions are not applied to each other, and neither becomes an all-in
+// hourly USD price. Fees, FX, VRAM, and benchmarks stay unknown.
 
-export const CLORE_DOC_CONFLICT = [
-  {
-    field: 'price.on_demand',
-    period: 'day',
-    sourceUrl: 'https://docs.clore.ai/for-hosts/api',
-    statement: 'servers[x].price.on_demand is documented as on-demand price per day',
-  },
-  {
-    field: 'price.usd.on_demand_clore',
-    period: 'hour',
-    sourceUrl: 'https://docs.clore.ai/dev/reference/clore-client',
-    statement: 'client reference describes price.usd.on_demand_clore as USD per hour',
-  },
-];
+export const ON_DEMAND_PERIOD = {
+  field: 'price.on_demand',
+  period: 'day',
+  sourceUrl: 'https://docs.clore.ai/for-hosts/api',
+  statement: 'servers[x].price.on_demand is documented as on-demand price per day',
+};
 
 const UNKNOWN_FEE = {
   known: false,
@@ -89,6 +81,7 @@ function oneOffer(server, currency, amount, meta) {
   return {
     id: currency ? `clore:${server?.id}:${currency}` : `clore:${server?.id}:no-price`,
     marketplace: 'clore',
+    machineFingerprint: `clore:${server?.id}`,
     sourceUrl: meta.sourceUrl,
     collectedAt: meta.collectedAt,
     expiresAt: meta.expiresAt,
@@ -110,10 +103,9 @@ function oneOffer(server, currency, amount, meta) {
       amount: typeof amount === 'number' ? amount : null,
       quoteCurrency: currency,
       paymentCurrency: currency,
-      period: null,
-      periodEvidence: '',
-      billingUnitConflict: true,
-      documentationConflicts: CLORE_DOC_CONFLICT,
+      period: currency ? ON_DEMAND_PERIOD.period : null,
+      periodEvidence: currency ? `${ON_DEMAND_PERIOD.sourceUrl} — ${ON_DEMAND_PERIOD.statement}` : '',
+      billingUnitConflict: false,
       feesComplete: false,
       feesCompleteEvidence: '',
       components: {

@@ -51,7 +51,9 @@ H100 必须写明形态（PCIe、SXM、NVL 等）、显存容量和显存代际�
 node gpu-rank/cli.js rank --input gpu-rank/fixtures/EXAMPLE.comparable.json --out /tmp/gpu-rank-example
 node gpu-rank/cli.js rank --input gpu-rank/fixtures/EXAMPLE.edges.json --out /tmp/gpu-rank-edges --include-theoretical
 node gpu-rank/cli.js validate --input gpu-rank/fixtures/EXAMPLE.comparable.json
-node gpu-rank/cli.js fetch-public --out /tmp/gpu-rank-public
+node gpu-rank/cli.js fetch-public --out /tmp/gpu-rank-public --ttl-seconds 3600
+node gpu-rank/cli.js candidates --body snapshot.json --collected-at 2026-11-24T13:38:32.995Z --as-of 2026-11-24T13:38:32.995Z --ttl-seconds 3600 --out /tmp/gpu-rank-candidates
+node gpu-rank/cli.js enrich --candidates /tmp/gpu-rank-candidates/candidates.json --evidence evidence.json --out /tmp/enriched.json
 cd gpu-rank && node --test
 ```
 

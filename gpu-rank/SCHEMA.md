@@ -26,9 +26,13 @@
 
 `inputTokens` 是 ≥0 的整数。`outputTokens`、`batchSize`、`concurrency` 是 ≥1 的整数。`maxLatencyMs` 是正的有限数。
 
+`protocol` 必填：`id`、`latencyStatistic`（`avg`、`p50`、`p95`、`p99`、`ttft_p99`、`e2e_p99` 之一）、`engineIdentity`（`must_match` 或 `unconstrained`）。`must_match` 时 `engine` 也必填，基准和候选必须使用同一个引擎。`unconstrained` 允许不同引擎留在同一组，但报告仍写出引擎，不把差异当成已经核实。
+
+`latencyMs` 必须是有限数并且 ≥ 0。0 表示记录到的 0 毫秒，不是未知。缺失、null、字符串、NaN、Infinity 和负数都不能进入榜单。比较时先确认 `finite()` 不是 null，再比上下界。
+
 ## baseline
 
-`gpu.model` 必须是 `H100`。`gpu.formFactor`、`gpu.memoryGeneration` 非空。`gpu.vramGb` 和 `throughput` 是正的有限数。`gpuCount` 是 ≥1 的整数。`throughputScope` 必须是 `whole_machine`。`workload` 与文档 workload 的身份字段一致。`latencyMs` 在约束内。`sourceUrl`、`collectedAt`、`evidence` 都要有。
+`kind` 必须是 `measured`。`gpu.model` 必须是 `H100`。`gpu.formFactor` 只能是 `PCIe`、`SXM`、`NVL`。`gpu.memoryGeneration` 只能是 `HBM2e`、`HBM3`。`gpu.vramGb` 只能是 80 或 94。这些是参照身份，不是性能系数。`gpuCount` 是 ≥1 的整数。1 卡的单位是 `1xH100`，并写出 `eqH100`。多卡整机单位是 `NxH100-node`，`eqH100` 留空，不除以卡数。`throughputScope` 必须是 `whole_machine`。`workload`、`protocol` 与文档一致。`latencyMs` 是有限数、≥ 0 且不超过约束。`machineFingerprint`、`sourceUrl`、`collectedAt`、`evidence` 都要有。baseline id 在文件内唯一，重复则整份文件失败。
 
 ## requirements
 
@@ -50,11 +54,11 @@
 | `id` | 同一文件内唯一。重复 id 全部拒绝 |
 | `marketplace` | 非空 |
 | `sourceUrl` | https |
-| `collectedAt` / `expiresAt` | 缺过期时间、采集时间晚于 `asOf`、或已过期：拒绝 |
+| `collectedAt` / `expiresAt` / `validity` | `expiresAt` 是供应商有效期。没有它时，可以给 `validity.source=local_policy` 和正的 `ttlSeconds`，并标明这不是供应商可租承诺。两者都没有则待核，不当成永不过期。供应商时间已过是 `vendor_expired`；本地 TTL 已过是 `local_observation_stale`。`maxAgeSeconds` 仍单独约束采集时间。`vendorGuaranteesAvailability: true` 会被待核，输出里这个字段固定为 false |
 | `available` | `true` 还要 `availabilityEvidence`。`false` 排除。其他待核 |
 | `gpu.count` | 整数 ≥1，否则待核或拒绝。不从型号字符串里猜卡数 |
 | `gpu.model` | 非空才算已知 |
-| `gpu.vramGbEach` | 每卡显存。`vramScope` 必须是 `per_gpu`，并有 `vramEvidence` |
+| `gpu.vramGbEach` | 每卡显存。启用每卡门槛时 `vramScope` 必须正好是 `per_gpu`。缺失、空串、`total`、`unknown` 都待核 |
 | `diskGb` / `diskEvidence` | 磁盘门槛启用时必填 |
 | `network.downMbps` / `upMbps` / `evidence` | 网络门槛启用时必填 |
 | `backend.name` / `compatible` / `evidence` | `compatible: true` 且名字在允许列表里，并有证据 |

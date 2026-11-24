@@ -8,6 +8,20 @@ export function finite(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
+// null, strings, NaN, and non-finite numbers are invalid. Do not write `finite(v) >= 0`:
+// finite() returns null for those values, and `null >= 0` is true in JavaScript.
+export function finiteAtLeast(v, min) {
+  const n = finite(v);
+  if (n == null || n < min) return null;
+  return n;
+}
+
+export const H100_FORM_FACTORS = new Set(['PCIe', 'SXM', 'NVL']);
+export const H100_MEMORY_GENERATIONS = new Set(['HBM2e', 'HBM3']);
+export const H100_VRAM_GB = new Set([80, 94]);
+export const LATENCY_STATISTICS = new Set(['avg', 'p50', 'p95', 'p99', 'ttft_p99', 'e2e_p99']);
+export const ENGINE_IDENTITY = new Set(['must_match', 'unconstrained']);
+
 export function isIsoZ(s) {
   if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(s)) return false;
   return Number.isFinite(Date.parse(s));
@@ -36,6 +50,13 @@ export function sameWorkload(a, b) {
   return WORKLOAD_KEYS.every(k => left[k] === right[k]);
 }
 
+export function sameProtocol(a, b) {
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (a.id !== b.id || a.latencyStatistic !== b.latencyStatistic || a.engineIdentity !== b.engineIdentity) return false;
+  if (a.engineIdentity === 'must_match' && a.engine !== b.engine) return false;
+  return true;
+}
+
 function nonEmpty(s) {
   return typeof s === 'string' && s.trim().length > 0;
 }
@@ -60,6 +81,15 @@ export function validateStructure(doc) {
   if (!isIsoZ(doc.asOf)) err('asOf must be a UTC ISO timestamp');
   errors.push(...workloadErrors(doc.workload, 'workload'));
   if (!Array.isArray(doc.baselines)) err('baselines must be an array');
+  else {
+    const seen = new Set();
+    for (const baseline of doc.baselines) {
+      const id = baseline && baseline.id != null ? String(baseline.id) : '';
+      if (!id) continue;
+      if (seen.has(id)) err(`duplicate baseline id ${id}`);
+      seen.add(id);
+    }
+  }
   if (!Array.isArray(doc.offers)) err('offers must be an array');
   if (!Array.isArray(doc.fx)) err('fx must be an array');
   else {
@@ -85,6 +115,17 @@ export function workloadErrors(w, prefix) {
   if (!Number.isInteger(w.concurrency) || w.concurrency < 1) errors.push(`${prefix}.concurrency must be an integer >= 1`);
   const lat = finite(w.maxLatencyMs);
   if (lat == null || lat <= 0) errors.push(`${prefix}.maxLatencyMs must be a finite number > 0`);
+  errors.push(...protocolErrors(w.protocol, prefix));
+  return errors;
+}
+
+export function protocolErrors(p, prefix) {
+  const errors = [];
+  if (!p || typeof p !== 'object') return [`${prefix}.protocol is required`];
+  if (!nonEmpty(p.id)) errors.push(`${prefix}.protocol.id must be a non-empty string`);
+  if (!LATENCY_STATISTICS.has(p.latencyStatistic)) errors.push(`${prefix}.protocol.latencyStatistic is not a recognized statistic`);
+  if (!ENGINE_IDENTITY.has(p.engineIdentity)) errors.push(`${prefix}.protocol.engineIdentity must be must_match or unconstrained`);
+  if (p.engineIdentity === 'must_match' && !nonEmpty(p.engine)) errors.push(`${prefix}.protocol.engine is required when engineIdentity is must_match`);
   return errors;
 }
 
@@ -135,16 +176,20 @@ export function assessBaseline(b, workload, asOfMs) {
   const problems = [];
   if (!b || typeof b !== 'object') return ['baseline is not an object'];
   if (!nonEmpty(b.id)) problems.push('id');
+  if (b.kind !== 'measured') problems.push('kind');
   if (b.gpu?.model !== 'H100') problems.push('gpu.model must be H100');
-  if (!nonEmpty(b.gpu?.formFactor)) problems.push('gpu.formFactor');
-  if (!(finite(b.gpu?.vramGb) > 0)) problems.push('gpu.vramGb');
-  if (!nonEmpty(b.gpu?.memoryGeneration)) problems.push('gpu.memoryGeneration');
+  if (!H100_FORM_FACTORS.has(b.gpu?.formFactor)) problems.push('gpu.formFactor');
+  if (!H100_VRAM_GB.has(b.gpu?.vramGb)) problems.push('gpu.vramGb');
+  if (!H100_MEMORY_GENERATIONS.has(b.gpu?.memoryGeneration)) problems.push('gpu.memoryGeneration');
   if (!Number.isInteger(b.gpuCount) || b.gpuCount < 1) problems.push('gpuCount');
   if (!(finite(b.throughput) > 0)) problems.push('throughput');
   if (b.throughputScope !== 'whole_machine') problems.push('throughputScope');
   if (b.metric !== workload.metric) problems.push('metric');
   if (!sameWorkload(b.workload, workload)) problems.push('workload');
-  if (!(finite(b.latencyMs) >= 0) || b.latencyMs > workload.maxLatencyMs) problems.push('latencyMs');
+  if (!sameProtocol(b.protocol, workload.protocol)) problems.push('protocol');
+  const latency = finite(b.latencyMs);
+  if (latency == null || latency < 0 || latency > workload.maxLatencyMs) problems.push('latencyMs');
+  if (!nonEmpty(b.machineFingerprint)) problems.push('machineFingerprint');
   if (!httpsUrl(b.sourceUrl)) problems.push('sourceUrl');
   if (!isIsoZ(b.collectedAt) || Date.parse(b.collectedAt) > asOfMs) problems.push('collectedAt');
   if (!nonEmpty(b.evidence)) problems.push('evidence');

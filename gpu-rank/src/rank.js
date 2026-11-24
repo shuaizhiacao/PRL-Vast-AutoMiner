@@ -1,12 +1,20 @@
 import { quoteAllIn } from './money.js';
 import {
-  OPS_KEYS, assessBaseline, finite, httpsUrl, isIsoZ, sameWorkload, validateStructure,
+  OPS_KEYS, assessBaseline, finite, httpsUrl, isIsoZ, sameProtocol, sameWorkload, validateStructure,
 } from './schema.js';
 
 const KNOWN_OFFER_KEYS = new Set([
-  'id', 'marketplace', 'sourceUrl', 'collectedAt', 'expiresAt', 'available', 'availabilityEvidence',
-  'gpu', 'diskGb', 'diskEvidence', 'network', 'backend', 'quote', 'benchmarks', 'ops',
+  'id', 'marketplace', 'sourceUrl', 'collectedAt', 'expiresAt', 'validity', 'available', 'availabilityEvidence',
+  'machineFingerprint', 'gpu', 'diskGb', 'diskEvidence', 'network', 'backend', 'quote', 'benchmarks', 'ops', 'raw',
 ]);
+
+export function codePointCompare(a, b) {
+  const x = String(a);
+  const y = String(b);
+  if (x < y) return -1;
+  if (x > y) return 1;
+  return 0;
+}
 
 export function rankDocument(doc, { includeTheoretical = false, inputSha256 = null } = {}) {
   const structural = validateStructure(doc);
@@ -49,10 +57,12 @@ export function rankDocument(doc, { includeTheoretical = false, inputSha256 = nu
       concurrency: doc.workload.concurrency,
       maxLatencyMs: doc.workload.maxLatencyMs,
       metric: doc.workload.metric,
+      protocol: doc.workload.protocol,
     },
     formula: {
-      eqH100: 'candidate whole-machine measured throughput / same-condition H100 baseline throughput',
-      usdPerEqH100Hour: 'whole-machine all-in USD per hour / eqH100',
+      eqBaseline: 'candidate whole-machine measured throughput / same-condition whole baseline throughput',
+      eqH100: 'populated only when the H100 baseline gpuCount is 1; multi-GPU baselines stay on a separate node unit and are not divided by card count',
+      usdPerEqBaselineHour: 'whole-machine all-in USD per hour / eqBaseline',
       coefficients: 'none',
       crossBenchmarkMixing: false,
     },
@@ -67,6 +77,16 @@ export function rankDocument(doc, { includeTheoretical = false, inputSha256 = nu
       problems: b.problems,
     })),
     gaps: [],
+  };
+  const theoreticalCount = report.theoreticalBoards.reduce((n, group) => n + group.rows.length, 0);
+  report.accounting = {
+    offers: doc.offers.length,
+    ranked: report.ranked.length,
+    pending: report.pending.length,
+    excluded: report.excluded.length,
+    rejected: report.rejected.length,
+    theoretical: theoreticalCount,
+    balanced: report.ranked.length + report.pending.length + report.excluded.length + report.rejected.length + theoreticalCount === doc.offers.length,
   };
   report.gaps = buildGaps(report);
   return report;
@@ -91,14 +111,8 @@ function classifyOffer(offer, index, ctx) {
   else if ((ctx.idCount.get(id) || 0) > 1) add('rejected', 'duplicate_id');
   if (typeof offer.marketplace !== 'string' || !offer.marketplace.trim()) add('rejected', 'marketplace_missing');
   if (!httpsUrl(offer.sourceUrl)) add('rejected', 'source_url_missing');
-  if (!isIsoZ(offer.collectedAt) || !isIsoZ(offer.expiresAt)) add('rejected', 'invalid_timestamp');
-  else {
-    const collected = Date.parse(offer.collectedAt);
-    const expires = Date.parse(offer.expiresAt);
-    if (collected > ctx.asOfMs) add('rejected', 'collected_in_future');
-    if (expires <= ctx.asOfMs) add('rejected', 'expired');
-    if (ctx.doc.maxAgeSeconds != null && ctx.asOfMs - collected > ctx.doc.maxAgeSeconds * 1000) add('rejected', 'expired', 'maxAgeSeconds');
-  }
+  const timeNotes = [];
+  assessTime(offer, ctx.asOfMs, ctx.doc.maxAgeSeconds, add, timeNotes);
   const ignoredOfferKeys = Object.keys(offer).filter(k => !KNOWN_OFFER_KEYS.has(k));
   gateHardware(offer, ctx.doc.requirements, add);
   checkOps(offer.ops, add);
@@ -118,28 +132,78 @@ function classifyOffer(offer, index, ctx) {
     bench,
     theoretical,
     ignoredOfferKeys,
-    notes: money.notes,
+    notes: [...(money.notes || []), ...timeNotes],
+    validitySource: validitySource(offer),
   });
 }
 
+function validitySource(offer) {
+  if (offer?.expiresAt != null) return 'vendor_expiry';
+  if (offer?.validity?.source === 'local_policy') return 'local_policy';
+  return 'unknown';
+}
+
+function assessTime(offer, asOfMs, maxAgeSeconds, add, notes) {
+  if (!isIsoZ(offer.collectedAt)) {
+    add('rejected', 'invalid_timestamp', 'collectedAt');
+    return;
+  }
+  const collected = Date.parse(offer.collectedAt);
+  if (collected > asOfMs) add('rejected', 'collected_in_future');
+  if (maxAgeSeconds != null && asOfMs - collected > maxAgeSeconds * 1000) add('rejected', 'expired', 'maxAgeSeconds');
+  if (offer.validity?.vendorGuaranteesAvailability === true) add('pending', 'vendor_guarantee_not_accepted');
+  if (offer.expiresAt != null) {
+    if (!isIsoZ(offer.expiresAt)) add('rejected', 'invalid_timestamp', 'expiresAt');
+    else if (Date.parse(offer.expiresAt) <= asOfMs) add('rejected', 'vendor_expired');
+    notes.push('vendor_expiry_is_not_a_rentability_guarantee');
+    return;
+  }
+  if (offer.validity?.source === 'local_policy') {
+    const ttl = finite(offer.validity.ttlSeconds);
+    if (ttl == null || !(ttl > 0)) {
+      add('pending', 'validity_unknown', 'local ttl');
+      return;
+    }
+    if (!(collected + ttl * 1000 > asOfMs)) add('rejected', 'local_observation_stale');
+    else notes.push('local_policy_fresh');
+    notes.push('vendor_expiry_not_provided');
+    notes.push('pre_rent_recheck');
+    return;
+  }
+  add('pending', 'validity_unknown');
+}
+
 function finish(id, index, offer, reasons, extra) {
-  const status = extra?.status || pickStatus(reasons);
+  let status = extra?.status || pickStatus(reasons);
+  let theoretical = !!extra?.theoretical && status !== 'ranked';
   const measured = extra?.bench?.measured || null;
   const baseline = measured?.baseline || extra?.bench?.theoretical?.baseline || null;
   const throughput = measured?.throughput ?? extra?.bench?.theoretical?.throughput ?? null;
-  const allIn = status === 'ranked' || extra?.theoretical ? extra?.money : null;
+  const allIn = status === 'ranked' || theoretical ? extra?.money : null;
+  let eqBaseline = null;
+  let usdPerEqBaselineHour = null;
   let eqH100 = null;
   let usdPerEqH100Hour = null;
-  if ((status === 'ranked' || extra?.theoretical) && throughput != null && baseline && allIn != null) {
-    eqH100 = throughput / baseline.throughput;
-    usdPerEqH100Hour = allIn / eqH100;
-    if (!(eqH100 > 0) || !Number.isFinite(eqH100) || !Number.isFinite(usdPerEqH100Hour)) {
-      eqH100 = null;
-      usdPerEqH100Hour = null;
+  let equivalenceUnit = null;
+  if ((status === 'ranked' || theoretical) && throughput != null && baseline && allIn != null) {
+    const ratio = throughput / baseline.throughput;
+    const usd = allIn / ratio;
+    if (!(ratio > 0) || !(usd > 0) || !Number.isFinite(ratio) || !Number.isFinite(usd)) {
+      reasons.push({ bucket: 'rejected', code: 'arithmetic_out_of_range', detail: '' });
+      status = 'rejected';
+      theoretical = false;
+    } else {
+      eqBaseline = ratio;
+      usdPerEqBaselineHour = usd;
+      equivalenceUnit = baseline.gpuCount === 1 ? '1xH100' : `${baseline.gpuCount}xH100-node`;
+      if (baseline.gpuCount === 1) {
+        eqH100 = ratio;
+        usdPerEqH100Hour = usd;
+      }
     }
   }
   const row = {
-    status: extra?.theoretical && status !== 'ranked' ? 'theoretical' : status,
+    status: theoretical ? 'theoretical' : status,
     index,
     offerId: id,
     marketplace: offer?.marketplace ?? null,
@@ -151,26 +215,32 @@ function finish(id, index, offer, reasons, extra) {
     priceUnit: offer?.quote?.priceUnit ?? null,
     period: offer?.quote?.period ?? null,
     rawAmount: finite(offer?.quote?.amount),
-    allInUsdPerHour: status === 'ranked' || extra?.theoretical ? allIn : null,
-    throughput: status === 'ranked' || extra?.theoretical ? throughput : null,
-    throughputScope: status === 'ranked' || extra?.theoretical ? 'whole_machine' : null,
+    allInUsdPerHour: status === 'ranked' || theoretical ? allIn : null,
+    throughput: status === 'ranked' || theoretical ? throughput : null,
+    throughputScope: status === 'ranked' || theoretical ? 'whole_machine' : null,
     gpuCount: Number.isInteger(offer?.gpu?.count) ? offer.gpu.count : null,
     gpuModel: offer?.gpu?.model ?? null,
-    baselineId: status === 'ranked' || extra?.theoretical ? baseline?.id ?? null : null,
-    baselineFormFactor: baseline && (status === 'ranked' || extra?.theoretical) ? baseline.gpu.formFactor : null,
-    baselineVramGb: baseline && (status === 'ranked' || extra?.theoretical) ? baseline.gpu.vramGb : null,
-    baselineMemoryGeneration: baseline && (status === 'ranked' || extra?.theoretical) ? baseline.gpu.memoryGeneration : null,
-    eqH100: status === 'ranked' || extra?.theoretical ? eqH100 : null,
-    usdPerEqH100Hour: status === 'ranked' || extra?.theoretical ? usdPerEqH100Hour : null,
+    baselineId: status === 'ranked' || theoretical ? baseline?.id ?? null : null,
+    baselineFormFactor: baseline && (status === 'ranked' || theoretical) ? baseline.gpu.formFactor : null,
+    baselineVramGb: baseline && (status === 'ranked' || theoretical) ? baseline.gpu.vramGb : null,
+    baselineMemoryGeneration: baseline && (status === 'ranked' || theoretical) ? baseline.gpu.memoryGeneration : null,
+    baselineGpuCount: baseline && (status === 'ranked' || theoretical) ? baseline.gpuCount : null,
+    equivalenceUnit: status === 'ranked' || theoretical ? equivalenceUnit : null,
+    eqBaseline: status === 'ranked' || theoretical ? eqBaseline : null,
+    usdPerEqBaselineHour: status === 'ranked' || theoretical ? usdPerEqBaselineHour : null,
+    eqH100: status === 'ranked' || theoretical ? eqH100 : null,
+    usdPerEqH100Hour: status === 'ranked' || theoretical ? usdPerEqH100Hour : null,
+    validitySource: extra?.validitySource || 'unknown',
+    vendorGuaranteesAvailability: false,
+    preRentStatus: extra?.validitySource === 'vendor_expiry' ? 'vendor_expiry_recorded' : 'recheck',
     ops: snapshotOps(offer?.ops),
-    reasons: reasons.filter(r => r.bucket === statusBucket(status, extra)).map(r => ({ code: r.code, detail: r.detail })),
+    reasons: reasons.filter(r => r.bucket === (theoretical ? 'pending' : status)).map(r => ({ code: r.code, detail: r.detail })),
     allReasons: reasons.map(r => ({ bucket: r.bucket, code: r.code, detail: r.detail })),
     ignoredOfferKeys: extra?.ignoredOfferKeys || [],
     notes: extra?.notes || [],
-    board: extra?.theoretical && status !== 'ranked' ? 'theoretical' : (status === 'ranked' ? 'measured' : null),
+    board: theoretical ? 'theoretical' : (status === 'ranked' ? 'measured' : null),
   };
-  if (extra?.theoretical && status !== 'ranked') row.theoretical = true;
-  else row.theoretical = false;
+  row.theoretical = theoretical;
   if (status === 'ranked') row.status = 'ranked';
   return row;
 }
@@ -191,6 +261,12 @@ function dedupe(list) {
   return [...new Set(list)];
 }
 
+function finiteAtLeastZero(v) {
+  const n = finite(v);
+  if (n == null || n < 0) return null;
+  return n;
+}
+
 function gateHardware(offer, req, add) {
   if (offer.available === false) add('excluded', 'unavailable');
   else if (offer.available !== true) add('pending', 'availability_unknown');
@@ -209,7 +285,7 @@ function gateHardware(offer, req, add) {
 
 function applyVram(req, gpu, add) {
   if (req.mode === 'disabled') return;
-  if (gpu.vramScope && gpu.vramScope !== 'per_gpu') {
+  if (gpu.vramScope !== 'per_gpu') {
     add('pending', 'vram_scope_unknown');
     return;
   }
@@ -293,7 +369,7 @@ function checkOps(ops, add) {
     const hasHours = item.hours != null;
     if (item.status === 'unknown' && hasHours) add('pending', 'ops_unknown_has_value', key);
     if (item.status === 'known' && (typeof item.note !== 'string' || !item.note.trim())) add('pending', 'ops_known_note_missing', key);
-    if (hasHours && !(finite(item.hours) >= 0)) add('pending', 'ops_invalid', key);
+    if (hasHours && finiteAtLeastZero(item.hours) == null) add('pending', 'ops_invalid', key);
   }
 }
 
@@ -379,27 +455,41 @@ function benchmarkFits(bench, offer, ctx) {
   if (!sameWorkload(bench.workload, ctx.doc.workload) || bench.metric !== ctx.doc.workload.metric) {
     return { ok: false, comparable: false };
   }
-  if (bench.latencyMs == null) return { ok: false, code: 'latency_unknown' };
-  if (!(finite(bench.latencyMs) >= 0)) return { ok: false, code: 'latency_unknown' };
-  if (bench.latencyMs > ctx.doc.workload.maxLatencyMs) return { ok: false, code: 'latency_over_constraint' };
+  const latency = finite(bench.latencyMs);
+  if (latency == null || latency < 0) return { ok: false, code: 'latency_unknown' };
+  if (latency > ctx.doc.workload.maxLatencyMs) return { ok: false, code: 'latency_over_constraint' };
+  if (!sameProtocol(bench.protocol, ctx.doc.workload.protocol)) return { ok: false, code: 'benchmark_protocol_mismatch' };
   if (bench.throughputScope !== 'whole_machine') return { ok: false, code: 'throughput_scope_not_whole_machine' };
-  if (!Number.isInteger(offer.gpu?.count) || bench.gpuCountAtMeasurement !== offer.gpu.count) {
-    return { ok: false, code: 'gpu_count_measurement_mismatch' };
-  }
+  const hardware = hardwareMismatch(bench, offer);
+  if (hardware) return { ok: false, code: hardware };
   if (!httpsUrl(bench.sourceUrl) || !isIsoZ(bench.collectedAt)) return { ok: false, code: 'benchmark_provenance_missing' };
   if (Date.parse(bench.collectedAt) > ctx.asOfMs) return { ok: false, code: 'benchmark_collected_in_future' };
   const baseline = ctx.usable.get(bench.baselineId);
   if (!baseline) return { ok: false, code: 'baseline_missing' };
-  if (!sameWorkload(baseline.workload, bench.workload) || baseline.metric !== bench.metric) {
+  if (!sameWorkload(baseline.workload, bench.workload) || baseline.metric !== bench.metric || !sameProtocol(baseline.protocol, bench.protocol)) {
     return { ok: false, code: 'baseline_not_comparable' };
   }
   return { ok: true, bench, baseline, throughput: bench.throughput };
 }
 
+function hardwareMismatch(bench, offer) {
+  if (typeof offer.machineFingerprint !== 'string' || !offer.machineFingerprint.trim()) return 'benchmark_hardware_mismatch';
+  if (bench.machineFingerprintAtMeasurement !== offer.machineFingerprint) return 'benchmark_hardware_mismatch';
+  if (bench.gpuModelAtMeasurement !== offer.gpu?.model) return 'benchmark_hardware_mismatch';
+  if (bench.vramScopeAtMeasurement !== 'per_gpu') return 'benchmark_hardware_mismatch';
+  const measuredVram = finite(bench.vramGbEachAtMeasurement);
+  const quotedVram = finite(offer.gpu?.vramGbEach);
+  if (measuredVram == null || quotedVram == null || measuredVram !== quotedVram) return 'benchmark_hardware_mismatch';
+  if (!Number.isInteger(offer.gpu?.count) || bench.gpuCountAtMeasurement !== offer.gpu.count) {
+    return 'gpu_count_measurement_mismatch';
+  }
+  return null;
+}
+
 function groupRows(rows, workload) {
   const map = new Map();
   for (const row of rows) {
-    if (!(row.usdPerEqH100Hour > 0) || !Number.isFinite(row.usdPerEqH100Hour)) continue;
+    if (!(row.usdPerEqBaselineHour > 0) || !Number.isFinite(row.usdPerEqBaselineHour)) continue;
     const key = JSON.stringify({
       modelId: workload.modelId,
       revision: workload.revision,
@@ -410,17 +500,21 @@ function groupRows(rows, workload) {
       concurrency: workload.concurrency,
       metric: workload.metric,
       maxLatencyMs: workload.maxLatencyMs,
+      protocolId: workload.protocol?.id ?? null,
+      latencyStatistic: workload.protocol?.latencyStatistic ?? null,
       baselineId: row.baselineId,
       baselineFormFactor: row.baselineFormFactor,
       baselineVramGb: row.baselineVramGb,
       baselineMemoryGeneration: row.baselineMemoryGeneration,
+      baselineGpuCount: row.baselineGpuCount,
+      equivalenceUnit: row.equivalenceUnit,
     });
     if (!map.has(key)) {
       map.set(key, {
         groupKey: key,
         comparable: true,
         mixAcrossBenchmarks: false,
-        order: 'usdPerEqH100Hour ascending',
+        order: 'usdPerEqBaselineHour ascending',
         workload: {
           modelId: workload.modelId,
           revision: workload.revision,
@@ -431,12 +525,15 @@ function groupRows(rows, workload) {
           concurrency: workload.concurrency,
           metric: workload.metric,
           maxLatencyMs: workload.maxLatencyMs,
+          protocol: workload.protocol,
         },
         baseline: {
           id: row.baselineId,
           formFactor: row.baselineFormFactor,
           vramGb: row.baselineVramGb,
           memoryGeneration: row.baselineMemoryGeneration,
+          gpuCount: row.baselineGpuCount,
+          equivalenceUnit: row.equivalenceUnit,
         },
         rows: [],
       });
@@ -445,10 +542,10 @@ function groupRows(rows, workload) {
   }
   const groups = [...map.values()];
   for (const group of groups) {
-    group.rows.sort((a, b) => a.usdPerEqH100Hour - b.usdPerEqH100Hour || String(a.offerId).localeCompare(String(b.offerId)));
+    group.rows.sort((a, b) => a.usdPerEqBaselineHour - b.usdPerEqBaselineHour || codePointCompare(a.offerId, b.offerId) || (a.index - b.index));
     group.rows.forEach((row, i) => { row.rank = i + 1; });
   }
-  groups.sort((a, b) => a.groupKey.localeCompare(b.groupKey));
+  groups.sort((a, b) => codePointCompare(a.groupKey, b.groupKey));
   return groups;
 }
 
@@ -457,10 +554,14 @@ function publicRow(row) {
     rank: null,
     status: row.status,
     board: row.board,
+    index: row.index,
     offerId: row.offerId,
     marketplace: row.marketplace,
     collectedAt: row.collectedAt,
     expiresAt: row.expiresAt,
+    validitySource: row.validitySource,
+    vendorGuaranteesAvailability: false,
+    preRentStatus: row.preRentStatus,
     sourceUrl: row.sourceUrl,
     quoteCurrency: row.quoteCurrency,
     paymentCurrency: row.paymentCurrency,
@@ -475,10 +576,14 @@ function publicRow(row) {
     baselineFormFactor: row.baselineFormFactor,
     baselineVramGb: row.baselineVramGb,
     baselineMemoryGeneration: row.baselineMemoryGeneration,
+    baselineGpuCount: row.baselineGpuCount,
+    equivalenceUnit: row.equivalenceUnit,
+    eqBaseline: row.eqBaseline,
+    usdPerEqBaselineHour: row.usdPerEqBaselineHour,
     eqH100: row.eqH100,
     usdPerEqH100Hour: row.usdPerEqH100Hour,
     ops: row.ops,
-    board: row.board,
+    notes: row.notes,
   };
 }
 
@@ -494,7 +599,7 @@ function buildGaps(report) {
   for (const row of [...report.pending, ...report.excluded, ...report.rejected]) {
     for (const reason of row.allReasons || []) codes.set(reason.code, (codes.get(reason.code) || 0) + 1);
   }
-  for (const [code, n] of [...codes.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  for (const [code, n] of [...codes.entries()].sort((a, b) => codePointCompare(a[0], b[0]))) {
     gaps.push(`${code}: ${n}`);
   }
   gaps.push('migration, overlap rent, drain, stability, and lease/cooldown are reported only and are not monetized');

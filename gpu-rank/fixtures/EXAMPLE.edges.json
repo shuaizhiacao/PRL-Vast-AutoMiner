@@ -19,11 +19,18 @@
     "batchSize": 1,
     "concurrency": 1,
     "maxLatencyMs": 2000,
-    "metric": "output_tokens_per_second"
+    "metric": "output_tokens_per_second",
+    "protocol": {
+      "id": "example-protocol-v1",
+      "latencyStatistic": "e2e_p99",
+      "engine": "vllm-example",
+      "engineIdentity": "must_match"
+    }
   },
   "baselines": [
     {
       "id": "h100-sxm-80-hbm3",
+      "kind": "measured",
       "gpu": {
         "model": "H100",
         "formFactor": "SXM",
@@ -43,8 +50,21 @@
         "batchSize": 1,
         "concurrency": 1,
         "maxLatencyMs": 2000,
-        "metric": "output_tokens_per_second"
+        "metric": "output_tokens_per_second",
+        "protocol": {
+          "id": "example-protocol-v1",
+          "latencyStatistic": "e2e_p99",
+          "engine": "vllm-example",
+          "engineIdentity": "must_match"
+        }
       },
+      "protocol": {
+        "id": "example-protocol-v1",
+        "latencyStatistic": "e2e_p99",
+        "engine": "vllm-example",
+        "engineIdentity": "must_match"
+      },
+      "machineFingerprint": "example-baseline:h100-sxm-80-hbm3",
       "latencyMs": 400,
       "sourceUrl": "https://example.invalid/bench/h100-sxm-80-hbm3",
       "collectedAt": "2026-11-24T10:00:00.000Z",
@@ -52,6 +72,7 @@
     },
     {
       "id": "h100-pcie-80-hbm2e",
+      "kind": "measured",
       "gpu": {
         "model": "H100",
         "formFactor": "PCIe",
@@ -71,8 +92,21 @@
         "batchSize": 1,
         "concurrency": 1,
         "maxLatencyMs": 2000,
-        "metric": "output_tokens_per_second"
+        "metric": "output_tokens_per_second",
+        "protocol": {
+          "id": "example-protocol-v1",
+          "latencyStatistic": "e2e_p99",
+          "engine": "vllm-example",
+          "engineIdentity": "must_match"
+        }
       },
+      "protocol": {
+        "id": "example-protocol-v1",
+        "latencyStatistic": "e2e_p99",
+        "engine": "vllm-example",
+        "engineIdentity": "must_match"
+      },
+      "machineFingerprint": "example-baseline:h100-pcie-80-hbm2e",
       "latencyMs": 400,
       "sourceUrl": "https://example.invalid/bench/h100-pcie-80-hbm2e",
       "collectedAt": "2026-11-24T10:00:00.000Z",
@@ -120,6 +154,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -189,6 +224,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -199,12 +238,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -233,6 +285,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -302,6 +355,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -312,12 +369,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -346,6 +416,7 @@
       "expiresAt": "2026-11-24T11:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -415,6 +486,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -425,12 +500,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -459,6 +547,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -528,6 +617,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -538,12 +631,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -572,6 +678,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -641,6 +748,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -651,12 +762,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -685,6 +809,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -754,6 +879,10 @@
           "throughput": 0,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -764,12 +893,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -798,6 +940,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -867,6 +1010,10 @@
           "throughput": -5,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -877,12 +1024,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -911,6 +1071,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": false,
       "availabilityEvidence": "EXAMPLE rented",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -980,6 +1141,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -990,12 +1155,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -1024,6 +1202,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -1093,6 +1272,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -1103,12 +1286,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -1137,6 +1333,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -1227,6 +1424,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -1296,6 +1494,10 @@
           "throughput": 900,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -1306,12 +1508,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
           "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a",
           "citationUrl": "https://example.invalid/papers/theory",
           "citationQuote": "EXAMPLE cited proxy, not a measurement of this machine"
         }
@@ -1342,6 +1557,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -1411,6 +1627,10 @@
           "throughput": 400,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 1,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -1421,12 +1641,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -1455,6 +1688,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -1524,6 +1758,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -1534,12 +1772,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -1568,6 +1819,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-clore-conflict",
       "gpu": {
         "count": 1,
         "model": "RTX 4090",
@@ -1646,6 +1898,10 @@
           "throughput": 1000,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 1,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-clore-conflict",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -1656,12 +1912,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 800,
           "sourceUrl": "https://example.invalid/bench/ex-clore-conflict",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-clore-conflict"
         }
       ],
       "ops": {
@@ -1690,6 +1959,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -1759,6 +2029,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -1769,12 +2043,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -1803,6 +2090,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -1872,6 +2160,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -1882,12 +2174,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {
@@ -1916,6 +2221,7 @@
       "expiresAt": "2026-11-24T18:00:00.000Z",
       "available": true,
       "availabilityEvidence": "EXAMPLE available",
+      "machineFingerprint": "example:ex-a",
       "gpu": {
         "count": 2,
         "model": "RTX 4090",
@@ -1985,6 +2291,10 @@
           "throughput": 800,
           "throughputScope": "whole_machine",
           "gpuCountAtMeasurement": 2,
+          "gpuModelAtMeasurement": "RTX 4090",
+          "vramGbEachAtMeasurement": 24,
+          "vramScopeAtMeasurement": "per_gpu",
+          "machineFingerprintAtMeasurement": "example:ex-a",
           "metric": "output_tokens_per_second",
           "workload": {
             "modelId": "example/model",
@@ -1995,12 +2305,25 @@
             "batchSize": 1,
             "concurrency": 1,
             "maxLatencyMs": 2000,
-            "metric": "output_tokens_per_second"
+            "metric": "output_tokens_per_second",
+            "protocol": {
+              "id": "example-protocol-v1",
+              "latencyStatistic": "e2e_p99",
+              "engine": "vllm-example",
+              "engineIdentity": "must_match"
+            }
+          },
+          "protocol": {
+            "id": "example-protocol-v1",
+            "latencyStatistic": "e2e_p99",
+            "engine": "vllm-example",
+            "engineIdentity": "must_match"
           },
           "latencyMs": 900,
           "sourceUrl": "https://example.invalid/bench/ex-a",
           "collectedAt": "2026-11-24T10:30:00.000Z",
-          "baselineId": "h100-sxm-80-hbm3"
+          "baselineId": "h100-sxm-80-hbm3",
+          "offerId": "ex-a"
         }
       ],
       "ops": {

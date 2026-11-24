@@ -49,7 +49,9 @@ USD/等效 H100 小时 = 整机全包 USD/h / 等效 H100。组内升序。没�
 
 主机文档写 `price.on_demand` 是每天的价格，`USD-Blockchain_on_demand` 是每天的 USD。客户端参考写 `price.usd.on_demand_clore` 是 USD/hr。同一份响应里这两个字段的比值中位数约 1.0002，2085 对里 1468 对落在 1±0.02，没有成簇的 24 或 1/24。因此既不除以 24，也不把客户端字段当成小时全包价。
 
-这次响应：`code=0`，2842 台服务器，按币种拆成 7144 条（bitcoin 2220，CLORE-Blockchain 2183，USD-Blockchain 2741）。`rented=true` 1340 台，`false` 1502 台。`my_servers` 为空。币种之间金额都不相同。归一化后 `feesComplete` 为 true 的是 0，周期被填上的是 0，`available=true` 的是 0，价格单位全部未知。用空汇率表再跑排名：ranked 0，groups 0，7144 条全部拒绝。拒绝原因同时包括缺过期时间、计费单位冲突、费用未知、缺汇率、缺同条件基准、显存单位未知、后端未知、网络未知、磁盘未知。
+这次响应：`code=0`，2842 台服务器，按币种拆成 7144 条（bitcoin 2220，CLORE-Blockchain 2183，USD-Blockchain 2741）。`rented=true` 1340 台，`false` 1502 台。`my_servers` 为空。币种之间金额都不相同。`feesComplete` 为 true 的是 0，`available=true` 的是 0，价格单位仍然未知。
+
+同一份响应用修订后的 `candidates` 再整理，没有再次访问网络。`--ttl-seconds 3600` 且 asOf 等于采集时间：ranked 0，groups 0，pending 3875，excluded 3269，rejected 0。`excluded` 是供应商字段 `rented=true`。`pending` 仍缺费用、汇率、显存作用域、后端、网络、磁盘和同条件基准。本地 TTL 只说明观察在 asOf 时还新鲜，`vendorGuaranteesAvailability` 为 false。上一版把缺 `expiresAt` 全部记成 `invalid_timestamp`；现在供应商有效期和本地观察 TTL 分开。`price.on_demand` 按主机文档保留为每天，不再因为另一个字段 `price.usd` 被标成永久冲突。
 
 Vast 报价没有拉取。官方 hello-world 的搜索示例是带 bearer 的 POST `/api/v0/bundles/`。导入器只保留原始 `dph_total`，带宽金额保持 null。
 
@@ -58,6 +60,24 @@ Vast 报价没有拉取。官方 hello-world 的搜索示例是带 bearer 的 PO
 ## 未完成
 
 没有同条件 H100 实测，所以没有候选进入排名，也没有最优机器。Clore 的 `renter_fees` 和 `creation_fees` 在另一条需要 auth 头的 GET 上，没有取。没有拉公开汇率。没有跑基准。Vast 市场报价没有取。这些都不是“暂时用理论值先排一名”。
+
+## 审核处置（相对 head 7182cf6）
+
+| 项 | 处置 |
+| --- | --- |
+| F1 | 接受。`finite()` 为 null 时不再做 `>= 0`。无效延迟不能进实测榜或理论榜。记录到的 0 毫秒仍算有效数字。测试覆盖缺失、null、空串、数字字符串、垃圾字符串、NaN、±Inf、负数和 0 |
+| F2 | 接受。只有 `gpuCount=1` 的 H100 才写 `eqH100`。多卡整机用 `NxH100-node`，输出卡数，不除以卡数，不和单卡组混排 |
+| F3 | 接受。候选实测必须带 GPU 型号、每卡显存、`per_gpu`、卡数和 `machineFingerprint`，并与报价机器一致。协议含延迟统计口径；`must_match` 时引擎也必须一致。H100 主榜基准的 `kind` 必须是 `measured`。HTTPS 链接不能代替这些字段 |
+| F4 | 接受。每卡门槛只接受 `vramScope === 'per_gpu'` |
+| F5 | 接受采集链路缺口，不接受把两个不同字段的日/小时描述写成永久冲突。`price.on_demand` 按主机文档记为每天，`price.usd` 忽略。`candidates` 写出真实候选并可用 `enrich` 补证据后再 `rank`。没有供应商 `expiresAt` 时，显式 `--ttl-seconds` 只代表本地观察，`vendorGuaranteesAvailability` 固定 false。没有同条件基准时输出待核名单，不编等效榜 |
+| F6 | 接受。重复 baseline id 使整份文件失败，两种顺序同一错误 |
+| F7 | 接受。溢出或非正结果进入 `rejected`/`arithmetic_out_of_range`，`accounting.balanced` 为 true |
+| F8 | 接受。GET 有超时，并按字节上限中止读取。一个目标失败后继续下一个。`bytes` 是字节数 |
+| F9 | 接受。CSV 对 CR 加引号，并给前导空白后的公式字符加撇号 |
+| F10 | 接受为当前契约，不扩展成跨币种结算。报价币种和支付币种不同仍待核。标价合计与分量不一致且没有说明也待核 |
+| F11 | 接受。排序使用字符串码元顺序，再用输入序号打破平局 |
+
+没有反驳为“不存在”的项。F5 里“两个字段互相矛盾所以全部报价永久冲突”这一步被改掉了：冲突没有被宣称已经消失，只是不再把另一个字段的小时描述套到 `price.on_demand` 上。费用、汇率、显存、基准和供应商有效期仍然挡住排名。
 
 ## 给审核看的点
 

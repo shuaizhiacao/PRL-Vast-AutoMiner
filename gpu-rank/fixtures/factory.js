@@ -11,7 +11,37 @@ export function workload(overrides = {}) {
     concurrency: 1,
     maxLatencyMs: 2000,
     metric: 'output_tokens_per_second',
+    protocol: {
+      id: 'example-protocol-v1',
+      latencyStatistic: 'e2e_p99',
+      engine: 'vllm-example',
+      engineIdentity: 'must_match',
+    },
     ...overrides,
+  };
+}
+
+export function measuredBench(partial = {}) {
+  const id = partial.offerId || 'ex-a';
+  const model = partial.gpuModelAtMeasurement || 'RTX 4090';
+  const count = partial.gpuCountAtMeasurement ?? 2;
+  return {
+    kind: 'measured',
+    throughput: 800,
+    throughputScope: 'whole_machine',
+    gpuCountAtMeasurement: count,
+    gpuModelAtMeasurement: model,
+    vramGbEachAtMeasurement: partial.vramGbEachAtMeasurement ?? (model === 'L40S' ? 48 : 24),
+    vramScopeAtMeasurement: 'per_gpu',
+    machineFingerprintAtMeasurement: partial.machineFingerprintAtMeasurement || `example:${id}`,
+    metric: 'output_tokens_per_second',
+    workload: workload(),
+    protocol: workload().protocol,
+    latencyMs: 900,
+    sourceUrl: `https://example.invalid/bench/${id}`,
+    collectedAt: '2026-11-24T10:30:00.000Z',
+    baselineId: 'h100-sxm-80-hbm3',
+    ...partial,
   };
 }
 
@@ -38,12 +68,15 @@ export function ops(overrides = {}) {
 export function baseline(id, formFactor, memoryGeneration, throughput = 1000) {
   return {
     id,
+    kind: 'measured',
     gpu: { model: 'H100', formFactor, vramGb: 80, memoryGeneration },
     gpuCount: 1,
     throughput,
     throughputScope: 'whole_machine',
     metric: 'output_tokens_per_second',
     workload: workload(),
+    protocol: workload().protocol,
+    machineFingerprint: `example-baseline:${id}`,
     latencyMs: 400,
     sourceUrl: `https://example.invalid/bench/${id}`,
     collectedAt: '2026-11-24T10:00:00.000Z',
@@ -67,6 +100,7 @@ export function offer(overrides = {}) {
     expiresAt: '2026-11-24T18:00:00.000Z',
     available: true,
     availabilityEvidence: 'EXAMPLE available',
+    machineFingerprint: 'example:ex-a',
     gpu: {
       count: 2,
       model: 'RTX 4090',
@@ -94,18 +128,7 @@ export function offer(overrides = {}) {
         platformFee: fee(amounts.platformFee, currency, period, 'EXAMPLE platform fee'),
       },
     },
-    benchmarks: [{
-      kind: 'measured',
-      throughput: 800,
-      throughputScope: 'whole_machine',
-      gpuCountAtMeasurement: 2,
-      metric: 'output_tokens_per_second',
-      workload: workload(),
-      latencyMs: 900,
-      sourceUrl: 'https://example.invalid/bench/ex-a',
-      collectedAt: '2026-11-24T10:30:00.000Z',
-      baselineId: 'h100-sxm-80-hbm3',
-    }],
+    benchmarks: [measuredBench({ offerId: 'ex-a', gpuCountAtMeasurement: 2, throughput: 800, latencyMs: 900 })],
     ops: ops(),
   };
   return merge(base, overrides.offer || {});
@@ -131,19 +154,11 @@ export function comparableDocument() {
     offer: {
       id: 'ex-b',
       sourceUrl: 'https://example.invalid/offer/ex-b',
+      machineFingerprint: 'example:ex-b',
       gpu: { count: 1, model: 'RTX 4090', vramGbEach: 24, vramScope: 'per_gpu', vramEvidence: 'EXAMPLE 24GB per GPU' },
-      benchmarks: [{
-        kind: 'measured',
-        throughput: 500,
-        throughputScope: 'whole_machine',
-        gpuCountAtMeasurement: 1,
-        metric: 'output_tokens_per_second',
-        workload: workload(),
-        latencyMs: 700,
-        sourceUrl: 'https://example.invalid/bench/ex-b',
-        collectedAt: '2026-11-24T10:30:00.000Z',
-        baselineId: 'h100-sxm-80-hbm3',
-      }],
+      benchmarks: [measuredBench({
+        offerId: 'ex-b', throughput: 500, gpuCountAtMeasurement: 1, latencyMs: 700,
+      })],
     },
     amounts: { compute: 1, storage: 0.5, bandwidth: 0.25, platformFee: 0.25 },
   });
@@ -154,19 +169,11 @@ export function comparableDocument() {
     offer: {
       id: 'ex-clore',
       sourceUrl: 'https://example.invalid/offer/ex-clore',
+      machineFingerprint: 'example:ex-clore',
       gpu: { count: 1, model: 'RTX 4090', vramGbEach: 24, vramScope: 'per_gpu', vramEvidence: 'EXAMPLE 24GB per GPU' },
-      benchmarks: [{
-        kind: 'measured',
-        throughput: 1000,
-        throughputScope: 'whole_machine',
-        gpuCountAtMeasurement: 1,
-        metric: 'output_tokens_per_second',
-        workload: workload(),
-        latencyMs: 800,
-        sourceUrl: 'https://example.invalid/bench/ex-clore',
-        collectedAt: '2026-11-24T10:30:00.000Z',
-        baselineId: 'h100-sxm-80-hbm3',
-      }],
+      benchmarks: [measuredBench({
+        offerId: 'ex-clore', throughput: 1000, gpuCountAtMeasurement: 1, latencyMs: 800,
+      })],
     },
   });
   const pcie = offer({
@@ -174,19 +181,12 @@ export function comparableDocument() {
     offer: {
       id: 'ex-pcie',
       sourceUrl: 'https://example.invalid/offer/ex-pcie',
+      machineFingerprint: 'example:ex-pcie',
       gpu: { count: 1, model: 'L40S', vramGbEach: 48, vramScope: 'per_gpu', vramEvidence: 'EXAMPLE 48GB per GPU' },
-      benchmarks: [{
-        kind: 'measured',
-        throughput: 250,
-        throughputScope: 'whole_machine',
-        gpuCountAtMeasurement: 1,
-        metric: 'output_tokens_per_second',
-        workload: workload(),
-        latencyMs: 1100,
-        sourceUrl: 'https://example.invalid/bench/ex-pcie',
-        collectedAt: '2026-11-24T10:30:00.000Z',
-        baselineId: 'h100-pcie-80-hbm2e',
-      }],
+      benchmarks: [measuredBench({
+        offerId: 'ex-pcie', throughput: 250, gpuCountAtMeasurement: 1, gpuModelAtMeasurement: 'L40S',
+        vramGbEachAtMeasurement: 48, latencyMs: 1100, baselineId: 'h100-pcie-80-hbm2e',
+      })],
     },
   });
   return {
@@ -279,13 +279,11 @@ export function edgesDocument() {
     amounts: { compute: 240, storage: 0, bandwidth: 0, platformFee: 0 },
     offer: {
       id: 'ex-clore-conflict',
+      machineFingerprint: 'example:ex-clore-conflict',
       gpu: { count: 1, model: 'RTX 4090', vramGbEach: 24, vramScope: 'per_gpu', vramEvidence: 'EXAMPLE 24GB per GPU' },
-      benchmarks: [{
-        kind: 'measured', throughput: 1000, throughputScope: 'whole_machine', gpuCountAtMeasurement: 1,
-        metric: 'output_tokens_per_second', workload: workload(), latencyMs: 800,
-        sourceUrl: 'https://example.invalid/bench/ex-clore-conflict', collectedAt: '2026-11-24T10:30:00.000Z',
-        baselineId: 'h100-sxm-80-hbm3',
-      }],
+      benchmarks: [measuredBench({
+        offerId: 'ex-clore-conflict', throughput: 1000, gpuCountAtMeasurement: 1, latencyMs: 800,
+      })],
       quote: {
         billingUnitConflict: true,
         documentationConflicts: [{ field: 'price.usd.on_demand_clore', period: 'hour', amount: 2 }],
