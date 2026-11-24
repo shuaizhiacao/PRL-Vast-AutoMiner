@@ -1,0 +1,16 @@
+{
+  "name": "flop-sponsor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FLOP devnet 矿工赞助申请与 Clore GPU backend 编排。默认 DRY，不租机、不提交赞助。",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "dependencies": {
+    "@polkadot/keyring": "^13.5.1",
+    "@polkadot/util-crypto": "^13.5.1"
+  }
+}

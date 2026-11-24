@@ -1,0 +1,38 @@
+{
+  "dryRun": true,
+  "autoApply": false,
+  "autoRent": false,
+  "autoCancelOnFail": false,
+  "network": "devnet",
+  "genesisHash": "0x99c172c095340ace980631f9123544c6bebd4839f3437e463533422d8be2d631",
+  "rpcUrl": "wss://rpc.devnet.flop.network",
+  "limitsUrl": "https://faucet.flop.network/limits",
+  "sponsorUrl": "https://faucet.flop.network/sponsor/miner",
+  "sponsorMode": "automatic",
+  "signMode": "local",
+  "pollMinMs": 30000,
+  "pollMaxMs": 60000,
+  "modelProfile": "8b",
+  "maxUsdPerHour": null,
+  "maxRentHours": null,
+  "rankBy": "hourly",
+  "graceHoursDefault": 4,
+  "bootEstimateMs": 900000,
+  "calibrateEstimateMs": 1800000,
+  "reconcileBudgetMs": 180000,
+  "addressFile": "",
+  "signerFile": "",
+  "clore": {
+    "baseUrl": "https://api.clore.ai/v1",
+    "image": "",
+    "currency": "CLORE-Blockchain",
+    "type": "on-demand",
+    "rentalHours": null,
+    "autoRenew": false
+  },
+  "review": {
+    "submitUrl": "",
+    "approvedFile": ""
+  },
+  "stateDir": "flop-sponsor/data"
+}
