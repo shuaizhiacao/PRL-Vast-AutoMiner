@@ -27,6 +27,23 @@ export function matchNewOrder(orders, { serverId, intentAtSec, windowSec = RECON
   return hits;
 }
 
+// 下单前接管：已经记过的订单号，或环境里带 flop- 前缀的活跃订单。
+export function adoptableOrders(orders, { orderId, tag } = {}) {
+  const hits = [];
+  for (const order of orders || []) {
+    if (!order || order.expired === true) continue;
+    const id = orderIdOf(order);
+    if (orderId != null && id === orderId) {
+      hits.push(order);
+      continue;
+    }
+    const marked = String(order.env?.FLOP_TAG || order.tag || '');
+    if (tag && marked === tag) hits.push(order);
+    else if (marked.startsWith('flop-')) hits.push(order);
+  }
+  return hits;
+}
+
 export function orderIdOf(order) {
   if (Number.isInteger(order?.id)) return order.id;
   if (Number.isInteger(order?.order_id)) return order.order_id;

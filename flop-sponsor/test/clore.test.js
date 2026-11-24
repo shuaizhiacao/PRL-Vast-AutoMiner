@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyCreate, matchNewOrder, parseSshEndpoint, confirmCancel, createClore, planOrder } from '../src/clore.js';
-import { assessHardware, filterServers } from '../src/gpu.js';
+import { classifyCreate, matchNewOrder, parseSshEndpoint, confirmCancel, createClore, planOrder, adoptableOrders } from '../src/clore.js';
+import { assessHardware, filterServers, selectServers } from '../src/gpu.js';
 import { canTransition } from '../src/state.js';
 import { clock, mockFetch, serverGood, orderGood } from './helpers.js';
 
@@ -85,6 +85,28 @@ test('8B 至少 16GB，27B 要 80GB 显存和 200GB 盘', () => {
   assert.deepEqual(filterServers(servers, { minVramGb: 80, minDiskGb: 200 }, 'CLORE-Blockchain').map(s => s.id), [9]);
   assert.equal(assessHardware({ smiText: '8192 MiB', diskText: '10GB', profile: { minVramGb: 16 } }).ok, false);
   assert.equal(assessHardware({ smiText: '81920 MiB', diskText: '250GB', profile: { minVramGb: 80, minDiskGb: 200 } }).ok, true);
+});
+
+test('按每小时美元价过滤和排序，也可按 H100 等效单价', () => {
+  const profile = { minVramGb: 16 };
+  const cheap = { id: 2, rented: false, specs: { gpuram: 24, disk: '400GB' }, price: { on_demand: { 'CLORE-Blockchain': 1, 'USD-Blockchain': 24 } } };
+  const pricey = { id: 1, rented: false, specs: { gpuram: 80, disk: '900GB' }, price: { on_demand: { 'CLORE-Blockchain': 3, 'USD-Blockchain': 72 } } };
+  const over = { id: 3, rented: false, specs: { gpuram: 80, disk: '900GB' }, price: { on_demand: { 'CLORE-Blockchain': 9, 'USD-Blockchain': 240 } } };
+  const hourly = selectServers([pricey, over, cheap], { profile, currency: 'CLORE-Blockchain', maxUsdPerHour: 5, rankBy: 'hourly' });
+  assert.deepEqual(hourly.map(s => s.id), [2, 1]);
+  const small = { id: 4, rented: false, specs: { gpuram: 16, disk: '400GB' }, price: { on_demand: { 'CLORE-Blockchain': 1, 'USD-Blockchain': 24 } } };
+  const big = { id: 5, rented: false, specs: { gpuram: 80, disk: '900GB' }, price: { on_demand: { 'CLORE-Blockchain': 2, 'USD-Blockchain': 72 } } };
+  const byH100 = selectServers([small, big], { profile, currency: 'CLORE-Blockchain', maxUsdPerHour: 10, rankBy: 'h100' });
+  assert.deepEqual(byH100.map(s => s.id), [5, 4]);
+});
+
+test('活跃的 flop 订单可以被接管', () => {
+  const orders = [
+    { id: 1, expired: true, env: { FLOP_TAG: 'flop-old' } },
+    { id: 2, expired: false, env: { FLOP_TAG: 'flop-live' } },
+    { id: 3, expired: false, env: { FLOP_TAG: 'other' } },
+  ];
+  assert.deepEqual(adoptableOrders(orders).map(o => o.id), [2]);
 });
 
 test('没有席位记录不能直接租', () => {

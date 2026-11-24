@@ -19,6 +19,27 @@ export function parseVramGb(text) {
   return Math.max(...lines.map(Number)) / 1024;
 }
 
+// Clore 的 on_demand 标价是每天。折成美元小时价只用 USD-Blockchain，不猜汇率。
+export function hourlyUsd(server) {
+  const daily = server?.price?.on_demand?.['USD-Blockchain'];
+  if (typeof daily !== 'number' || !Number.isFinite(daily) || daily < 0) return null;
+  return daily / 24;
+}
+
+export function selectServers(servers, { profile, currency, maxUsdPerHour, rankBy = 'hourly' }) {
+  const rows = [];
+  for (const server of filterServers(servers, profile, currency)) {
+    const hourly = hourlyUsd(server);
+    if (hourly == null || hourly > maxUsdPerHour) continue;
+    const vram = server.specs.gpuram;
+    const h100 = vram > 0 ? hourly / (vram / 80) : Number.POSITIVE_INFINITY;
+    rows.push({ server, hourly, h100 });
+  }
+  const key = rankBy === 'h100' ? 'h100' : 'hourly';
+  rows.sort((a, b) => (a[key] - b[key]) || (a.server.id - b.server.id));
+  return rows.map(row => row.server);
+}
+
 export function filterServers(servers, profile, currency) {
   const picked = [];
   for (const server of servers || []) {

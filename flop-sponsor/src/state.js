@@ -15,6 +15,7 @@ export const PHASES = [
   'CALIBRATE',
   'READY',
   'FAILED',
+  'STOP_NEEDS_HUMAN',
 ];
 
 const NEXT = {
@@ -45,7 +46,8 @@ export function blankState() {
 }
 
 export function canTransition(from, to) {
-  if (to === 'FAILED' && from !== 'FAILED' && from !== 'READY') return true;
+  if (to === 'FAILED' && from !== 'FAILED' && from !== 'READY' && from !== 'STOP_NEEDS_HUMAN') return true;
+  if (to === 'STOP_NEEDS_HUMAN' && from !== 'FAILED' && from !== 'READY' && from !== 'STOP_NEEDS_HUMAN') return true;
   return (NEXT[from] || []).includes(to);
 }
 

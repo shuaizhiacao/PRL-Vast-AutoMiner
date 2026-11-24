@@ -53,7 +53,7 @@ export function serverGood() {
   return {
     id: 6,
     rented: false,
-    price: { on_demand: { 'CLORE-Blockchain': 1 } },
+    price: { on_demand: { 'CLORE-Blockchain': 1, 'USD-Blockchain': 24 } },
     specs: { gpuram: 24, disk: 'NVMe disk 400GB', gpu: '1x RTX 4090' },
   };
 }

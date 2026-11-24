@@ -13,6 +13,13 @@
   "pollMinMs": 30000,
   "pollMaxMs": 60000,
   "modelProfile": "8b",
+  "maxUsdPerHour": null,
+  "maxRentHours": null,
+  "rankBy": "hourly",
+  "graceHoursDefault": 4,
+  "bootEstimateMs": 900000,
+  "calibrateEstimateMs": 1800000,
+  "reconcileBudgetMs": 180000,
   "addressFile": "",
   "signerFile": "",
   "clore": {

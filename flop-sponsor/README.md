@@ -24,6 +24,14 @@ node index.js sign-dry --signer data/signer
 
 公开赞助路由按官方说明是每个地址每分钟 6 次。客户端自己限速，并且全局单飞，避免官方返回 `account_busy`。一个账户只做一次赞助，不新建账户绕过限额，也不调用 `miner register`。
 
+DRY 只在 `SEAT_CHECK` 读 `/limits`。状态文件如果已经停在 `RENT_UNKNOWN`、`RENTED` 或 `BOOTSTRAP`，DRY 只把阶段打印出来，不对账、不 SSH、不部署。`create_order`、`cancel_order`、赞助 POST、SSH 和 backend 启动各自再检查一次 LIVE 双开关，漏判会直接抛错。
+
+赞助一旦成功，就不再用席位门禁挡住租机。截止时间是 `sponsoredAt + graceHours`（`graceHours` 来自当次 `/limits`，缺了用默认 4 小时）。剩下的时间不够预估的开机加校准时，进入 `STOP_NEEDS_HUMAN`。
+
+LIVE 必须自己填 `maxUsdPerHour` 和 `maxRentHours`，否则拒绝启动。候选机先丢掉高于上限的，再按 `rankBy=hourly`（每小时美元总价）或 `rankBy=h100`（总价除以显存/80GB）从低到高取第一台。美元小时价只认 `USD-Blockchain` 日价除以 24。
+
+下单前先读 `my_orders`，已有 `flop-` 活跃订单就接管。`create_order` 只会提交一次，标记写进状态文件，重启也不会再下一单。提交之后按 `si` 和 `ct ±120` 秒多次对账，两次之间至少 5 秒，总时长由 `reconcileBudgetMs` 控制（默认 3 分钟）。到点还没有订单就进入 `STOP_NEEDS_HUMAN`。
+
 ## 官方依据
 
 以下以 2026-11-24 拉到的公开文档和发行包为准。

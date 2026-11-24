@@ -22,3 +22,19 @@ export function pollDelayMs(rng = Math.random, cfg = {}) {
 export function utcDay(nowMs) {
   return new Date(nowMs).toISOString().slice(0, 10);
 }
+
+export function readGraceHours(raw, fallback = 4) {
+  const value = raw?.sponsor?.miner?.automatic?.graceHours;
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  return fallback;
+}
+
+// 赞助成功后的租机窗口。剩余时间不够开机加校准则需要人接手。
+export function graceWindow({ sponsoredAt, graceHours, bootEstimateMs, calibrateEstimateMs, now }) {
+  if (typeof sponsoredAt !== 'number') return { ok: false, reason: 'missing-sponsoredAt' };
+  const need = Number(bootEstimateMs) + Number(calibrateEstimateMs);
+  const deadline = sponsoredAt + graceHours * 3600 * 1000;
+  const remain = deadline - now;
+  if (remain < need) return { ok: false, reason: 'grace-too-short', remain, need, deadline };
+  return { ok: true, remain, need, deadline };
+}

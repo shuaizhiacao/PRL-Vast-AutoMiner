@@ -44,6 +44,16 @@ export const DEFAULTS = {
   maxSponsorRetries: 2,
   retry503Ms: 60_000,
   stateDir: 'flop-sponsor/data',
+  // LIVE 没填 maxUsdPerHour 会拒绝启动。价格按 USD-Blockchain 日价 / 24。
+  maxUsdPerHour: null,
+  // LIVE 没填则拒绝，避免 on-demand 没有租期上限。
+  maxRentHours: null,
+  // hourly：每小时总价；h100：每小时总价 / (显存 GB / 80)
+  rankBy: 'hourly',
+  graceHoursDefault: 4,
+  bootEstimateMs: 15 * 60 * 1000,
+  calibrateEstimateMs: 30 * 60 * 1000,
+  reconcileBudgetMs: 3 * 60 * 1000,
 };
 
 function merge(base, extra) {
@@ -82,7 +92,20 @@ export function loadConfig(file) {
     throw new Stop('autoRenew=true 时必须自己填写 autoRenewMaxPrice，脚本不猜价格');
   }
   if (!cfg.profiles?.[cfg.modelProfile]) throw new Stop(`未知机型档位：${cfg.modelProfile}`);
+  if (cfg.rankBy !== 'hourly' && cfg.rankBy !== 'h100') throw new Stop('rankBy 只能是 hourly 或 h100');
   return cfg;
+}
+
+// 写入口专用。dryRun 或双开关缺一就抛错，不能靠调用方记得提前返回。
+export function assertLive(cfg, env = process.env) {
+  if (executionMode(cfg, env) !== 'live') {
+    throw new Stop('写操作被拒绝：需要 dryRun=false、autoApply=true、autoRent=true，并且 FLOP_CONFIRM_LIVE=1', 'LIVE_REFUSED');
+  }
+}
+
+export function assertLiveReady(cfg) {
+  if (!(Number(cfg.maxUsdPerHour) > 0)) throw new Stop('LIVE 必须配置 maxUsdPerHour，拒绝不限价启动');
+  if (!(Number(cfg.maxRentHours) > 0)) throw new Stop('LIVE 必须配置 maxRentHours，拒绝没有租期上限的 on-demand');
 }
 
 // dryRun 不是 false 时永远只读。想写远端必须三个条件同时成立。

@@ -11,6 +11,10 @@ import { ADDRESS, clock, mockFetch, readFixture, serverGood, tempDir, testConfig
 function ctxOf(dir, fetchImpl, extra = {}) {
   const time = extra.clock || clock();
   const cfg = testConfig(dir, extra.cfg || {});
+  if ((extra.env || {}).FLOP_CONFIRM_LIVE === '1') {
+    if (extra.cfg?.maxUsdPerHour === undefined) cfg.maxUsdPerHour = 5;
+    if (extra.cfg?.maxRentHours === undefined) cfg.maxRentHours = 4;
+  }
   return {
     time,
     cfg,
@@ -93,6 +97,7 @@ describe('编排', { concurrency: 1 }, () => {
       if (call.url.endsWith('/marketplace')) return { body: { code: 0, servers: [serverGood()] } };
       if (call.url.endsWith('/create_order')) {
         assert.equal(call.body.type, 'on-demand');
+        assert.equal(call.body.rental_hours, 4);
         assert.equal(call.body.order_id, undefined);
         return { body: { code: 0 } };
       }
@@ -172,6 +177,7 @@ describe('编排', { concurrency: 1 }, () => {
         return { status: 200, body: {} };
       }
       if (call.url.endsWith('/marketplace')) return { body: { code: 0, servers: [] } };
+      if (call.url.endsWith('/my_orders')) return { body: { code: 0, orders: [] } };
       throw new Error(call.url);
     });
     const box = ctxOf(dir, fetchImpl, {
@@ -196,6 +202,7 @@ describe('编排', { concurrency: 1 }, () => {
       if (call.url.includes('/sponsor/')) return { status: 200, body: {} };
       if (call.url.endsWith('/marketplace')) return { body: { code: 0, servers: [serverGood()] } };
       if (call.url.endsWith('/create_order')) return { body: { code: 6, error: 'amount_too_low' } };
+      if (call.url.endsWith('/my_orders')) return { body: { code: 0, orders: [] } };
       throw new Error(call.url);
     });
     const box = ctxOf(dir, fetchImpl, {
@@ -228,7 +235,11 @@ describe('编排', { concurrency: 1 }, () => {
       env: { FLOP_CONFIRM_LIVE: '1' },
     });
     const unknown = await box2.run();
-    assert.equal(unknown.phase, 'RENT_UNKNOWN');
+    assert.equal(unknown.phase, 'STOP_NEEDS_HUMAN');
+    assert.equal(unknown.state.rent.createSubmitted, true);
+    assert.equal(creates, 1);
+    const again = await box2.run();
+    assert.equal(again.phase, 'STOP_NEEDS_HUMAN');
     assert.equal(creates, 1);
   });
 
@@ -270,6 +281,162 @@ describe('编排', { concurrency: 1 }, () => {
     assert.match(result.state.failure.reason, /显存/);
     assert.equal(calls.some(c => c.method === 'POST'), false);
     assert.equal(result.logs.join('\n').includes('不退租'), true);
+  });
+
+  test('DRY 遇到残留的租机状态只输出状态，写入口为零', async () => {
+    const sshCalls = [];
+    for (const phase of ['RENT_UNKNOWN', 'RENTED', 'BOOTSTRAP']) {
+      const dir = tempDir();
+      const state = blankState();
+      state.phase = phase;
+      state.sponsor = { done: true, sponsoredAt: Date.UTC(2026, 10, 24, 12, 0, 0) };
+      state.rent = { orderId: 38, serverId: 6, createSubmitted: true, tag: 'flop-abc12345', ssh: { host: 'n1.example', port: 10000 } };
+      saveState(dir, state);
+      const { fetchImpl, calls } = mockFetch(async (call) => {
+        if (call.method !== 'GET') throw new Error(`DRY 写了 ${call.method} ${call.url}`);
+        return { body: readFixture('limits-open') };
+      });
+      const box = ctxOf(dir, fetchImpl, {
+        env: { CLORE_API_KEY: 'test-key', FLOP_CONFIRM_LIVE: '1' },
+        cfg: { dryRun: true, autoApply: true, autoRent: true, autoCancelOnFail: true },
+      });
+      const result = await runOnce({
+        cfg: box.cfg,
+        env: { CLORE_API_KEY: 'test-key' },
+        fetchImpl,
+        now: box.time.now,
+        sleep: box.time.sleep,
+        stateDir: dir,
+        genesis: DEVNET_GENESIS,
+        genesisVerified: true,
+        ssh: { exec: async () => { sshCalls.push('ssh'); return '24576\n'; } },
+        sshKeys: async () => { throw new Error('DRY 不应生成 SSH 密钥'); },
+      });
+      assert.equal(result.dry, true);
+      assert.equal(result.readOnly, true);
+      assert.equal(result.phase, phase);
+      assert.equal(calls.filter(c => c.method !== 'GET').length, 0);
+    }
+    assert.equal(sshCalls.length, 0);
+  });
+
+  test('赞助成功后席位满了仍按 grace 租机', async () => {
+    const dir = tempDir();
+    const now0 = Date.UTC(2026, 10, 24, 12, 0, 0);
+    const state = blankState();
+    state.phase = 'SPONSORED';
+    state.sponsor = { done: true, sponsoredAt: now0, address: ADDRESS, graceHours: 4 };
+    saveState(dir, state);
+    const time = clock(now0 + 1000);
+    let creates = 0;
+    const { fetchImpl } = mockFetch(async (call) => {
+      if (call.url.includes('/limits')) return { body: readFixture('limits-positions-full') };
+      if (call.url.endsWith('/my_orders')) return { body: { code: 0, orders: creates ? [{ id: 38, si: 6, ct: Math.floor(time.now() / 1000), expired: false, pub_cluster: ['n1.example'], tcp_ports: ['22:10000'] }] : [] } };
+      if (call.url.endsWith('/marketplace')) return { body: { code: 0, servers: [serverGood()] } };
+      if (call.url.endsWith('/create_order')) { creates += 1; return { body: { code: 0 } }; }
+      throw new Error(call.url);
+    });
+    const box = ctxOf(dir, fetchImpl, {
+      clock: time,
+      cfg: { dryRun: false, autoApply: true, autoRent: true, backend: { plan() { return []; }, async start() { return { ok: true, ready: false }; } } },
+      env: { FLOP_CONFIRM_LIVE: '1', CLORE_API_KEY: 'k' },
+    });
+    const result = await box.run();
+    assert.equal(creates, 1);
+    assert.equal(result.phase, 'CALIBRATE');
+  });
+
+  test('剩余时间不够开机加校准则 STOP_NEEDS_HUMAN，不下单', async () => {
+    const dir = tempDir();
+    const now0 = Date.UTC(2026, 10, 24, 12, 0, 0);
+    const state = blankState();
+    state.phase = 'SPONSORED';
+    state.sponsor = { done: true, sponsoredAt: now0, graceHours: 4 };
+    saveState(dir, state);
+    let creates = 0;
+    const { fetchImpl } = mockFetch(async (call) => {
+      if (call.url.includes('/limits')) return { body: readFixture('limits-open') };
+      if (call.url.endsWith('/create_order')) { creates += 1; return { body: { code: 0 } }; }
+      return { body: { code: 0, orders: [], servers: [] } };
+    });
+    const box = ctxOf(dir, fetchImpl, {
+      clock: clock(now0 + 3.6 * 3600 * 1000),
+      cfg: { dryRun: false, autoApply: true, autoRent: true, bootEstimateMs: 3600 * 1000, calibrateEstimateMs: 3600 * 1000 },
+      env: { FLOP_CONFIRM_LIVE: '1' },
+    });
+    const result = await box.run();
+    assert.equal(result.phase, 'STOP_NEEDS_HUMAN');
+    assert.equal(result.state.failure.reason, 'grace-too-short');
+    assert.equal(creates, 0);
+  });
+
+  test('LIVE 没有 maxUsdPerHour 或 maxRentHours 就拒绝启动', async () => {
+    const dir = tempDir();
+    const { fetchImpl, calls } = mockFetch(async () => ({ body: readFixture('limits-open') }));
+    const box = ctxOf(dir, fetchImpl, {
+      cfg: { dryRun: false, autoApply: true, autoRent: true, maxUsdPerHour: null, maxRentHours: 4 },
+      env: { FLOP_CONFIRM_LIVE: '1' },
+    });
+    await assert.rejects(() => box.run(), /maxUsdPerHour/);
+    const box2 = ctxOf(tempDir(), fetchImpl, {
+      cfg: { dryRun: false, autoApply: true, autoRent: true, maxUsdPerHour: 1, maxRentHours: null },
+      env: { FLOP_CONFIRM_LIVE: '1' },
+    });
+    await assert.rejects(() => box2.run(), /maxRentHours/);
+    assert.equal(calls.length, 0);
+  });
+
+  test('已有 flop 订单就接管，对账失败也不再下第二单', async () => {
+    const dir = tempDir();
+    const now0 = Date.UTC(2026, 10, 24, 12, 0, 0);
+    const state = blankState();
+    state.phase = 'SPONSORED';
+    state.sponsor = { done: true, sponsoredAt: now0, graceHours: 4 };
+    saveState(dir, state);
+    let creates = 0;
+    const { fetchImpl } = mockFetch(async (call) => {
+      if (call.url.includes('/limits')) return { body: readFixture('limits-open') };
+      if (call.url.endsWith('/my_orders')) {
+        return { body: { code: 0, orders: [{ id: 38, si: 6, ct: Math.floor(now0 / 1000), expired: false, env: { FLOP_TAG: 'flop-existing1' }, pub_cluster: ['n1.example'], tcp_ports: ['22:10000'] }] } };
+      }
+      if (call.url.endsWith('/create_order')) { creates += 1; return { body: { code: 0 } }; }
+      if (call.url.endsWith('/marketplace')) return { body: { code: 0, servers: [serverGood()] } };
+      throw new Error(call.url);
+    });
+    const box = ctxOf(dir, fetchImpl, {
+      clock: clock(now0 + 1000),
+      cfg: { dryRun: false, autoApply: true, autoRent: true, backend: { plan() { return []; }, async start() { return { ok: true, ready: false }; } } },
+      env: { FLOP_CONFIRM_LIVE: '1' },
+    });
+    const adopted = await box.run();
+    assert.equal(creates, 0);
+    assert.equal(adopted.state.rent.orderId, 38);
+    assert.equal(adopted.phase, 'CALIBRATE');
+
+    const dir2 = tempDir();
+    const pending = blankState();
+    pending.phase = 'RENT_UNKNOWN';
+    pending.sponsor = { done: true, sponsoredAt: now0, graceHours: 4 };
+    pending.rent = { createSubmitted: true, serverId: 6, intentAtSec: Math.floor(now0 / 1000), tag: 'flop-once' };
+    saveState(dir2, pending);
+    let creates2 = 0;
+    let polls = 0;
+    const timed = mockFetch(async (call) => {
+      if (call.url.endsWith('/my_orders')) { polls += 1; return { body: { code: 0, orders: [] } }; }
+      if (call.url.endsWith('/create_order')) { creates2 += 1; return { body: { code: 0 } }; }
+      if (call.url.includes('/limits')) return { body: readFixture('limits-open') };
+      throw new Error(call.url);
+    });
+    const box2 = ctxOf(dir2, timed.fetchImpl, {
+      clock: clock(now0 + 1000),
+      cfg: { dryRun: false, autoApply: true, autoRent: true, reconcileBudgetMs: 10_000 },
+      env: { FLOP_CONFIRM_LIVE: '1' },
+    });
+    const missed = await box2.run();
+    assert.equal(creates2, 0);
+    assert.ok(polls >= 2);
+    assert.equal(missed.phase, 'STOP_NEEDS_HUMAN');
+    assert.equal(missed.state.failure.reason, 'reconcile-not-found');
   });
 
   test('review 没有提交地址就停止', async () => {

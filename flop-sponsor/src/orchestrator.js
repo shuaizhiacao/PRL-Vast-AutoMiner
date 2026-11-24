@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { executionMode } from './config.js';
+import { executionMode, assertLive, assertLiveReady } from './config.js';
 import { decideSeat } from './limits.js';
 import { request } from './http.js';
 import { writeSeatIntent } from './intent.js';
@@ -8,15 +8,15 @@ import { readPublicAddress } from './keys.js';
 import { signForSubmit, sponsorBodyShape, sponsorMessage } from './sign.js';
 import { submitSponsor, createRateLimiter, interpretSponsor, parseSponsorStdout } from './sponsor.js';
 import {
-  createClore, planOrder, redactOrder, classifyCreate, matchNewOrder, orderIdOf, parseSshEndpoint, confirmCancel,
+  createClore, planOrder, redactOrder, classifyCreate, matchNewOrder, orderIdOf, parseSshEndpoint, confirmCancel, adoptableOrders,
 } from './clore.js';
-import { filterServers, profileOf, assessHardware } from './gpu.js';
+import { selectServers, profileOf, assessHardware } from './gpu.js';
 import { loadState, saveState, transition } from './state.js';
 import { backendFrom } from './backend.js';
 import { maybeIdlePearl } from './pearl.js';
 import { Invariant, Stop } from './errors.js';
 import { redact } from './redact.js';
-import { utcDay, CREATE_COOLDOWN_MS, nextUtcMidnight } from './time.js';
+import { utcDay, CREATE_COOLDOWN_MS, nextUtcMidnight, readGraceHours, graceWindow } from './time.js';
 
 function finish(mode, state, logs, pearl, extra = {}) {
   return {
@@ -25,7 +25,7 @@ function finish(mode, state, logs, pearl, extra = {}) {
     state,
     logs,
     pearl,
-    stopped: extra.stopped === true || state.phase === 'FAILED',
+    stopped: extra.stopped === true || state.phase === 'FAILED' || state.phase === 'STOP_NEEDS_HUMAN',
     ...extra,
   };
 }
@@ -92,11 +92,29 @@ async function refreshSeat(ctx, state) {
   };
 }
 
-function assertSeat(state, nowMs) {
-  if (state.seat?.ok !== true || !(state.seat.expiresAt > nowMs)) throw new Invariant('无 SEAT_OK 不租');
+function needsHuman(state, reason, now) {
+  const failure = { reason, needsHuman: true };
+  if (state.phase === 'STOP_NEEDS_HUMAN') return { ...state, failure };
+  return transition(state, 'STOP_NEEDS_HUMAN', { failure }, now, reason);
+}
+
+async function readGrace(ctx, state) {
+  const limits = await fetchLimits(ctx);
+  return readGraceHours(limits.data, state.sponsor?.graceHours ?? ctx.cfg.graceHoursDefault ?? 4);
+}
+
+function withinGrace(ctx, state, graceHours) {
+  return graceWindow({
+    sponsoredAt: state.sponsor?.sponsoredAt,
+    graceHours,
+    bootEstimateMs: ctx.cfg.bootEstimateMs,
+    calibrateEstimateMs: ctx.cfg.calibrateEstimateMs,
+    now: ctx.now(),
+  });
 }
 
 async function sponsorOnce(ctx, state, log) {
+  assertLive(ctx.cfg, ctx.env);
   if (ctx.genesisVerified !== true) throw new Invariant('未校验 genesis 不签');
   const cfg = ctx.cfg;
   if (cfg.signMode === 'sponsor-sh') return sponsorViaScript(ctx, state, log);
@@ -123,6 +141,7 @@ async function sponsorOnce(ctx, state, log) {
 }
 
 async function sponsorViaScript(ctx, state, log) {
+  assertLive(ctx.cfg, ctx.env);
   if (!ctx.cfg.sponsorSh) throw new Stop('signMode=sponsor-sh 但没有官方 sponsor.sh 路径');
   if (typeof ctx.spawn !== 'function') throw new Stop('没有 sponsor.sh 执行器');
   if (ctx.genesisVerified !== true) throw new Invariant('未校验 genesis 不签');
@@ -163,7 +182,15 @@ async function applySponsor(ctx, state, log) {
     current = { ...current, sponsor: { ...current.sponsor, address: signed.address, attemptedDay: day } };
     if (decision.action === 'ok') {
       current = transition(current, 'SPONSORED', {
-        sponsor: { done: true, address: signed.address, httpStatus: posted.status, reason: decision.reason, attemptedDay: day },
+        sponsor: {
+          done: true,
+          address: signed.address,
+          httpStatus: posted.status,
+          reason: decision.reason,
+          attemptedDay: day,
+          sponsoredAt: ctx.now(),
+          graceHours: current.seat?.graceHours ?? ctx.cfg.graceHoursDefault,
+        },
       }, ctx.now(), decision.reason);
       saveState(ctx.stateDir, current);
       return { state: current };
@@ -197,41 +224,95 @@ async function applySponsor(ctx, state, log) {
   }
 }
 
-async function reconcile(ctx, state) {
+async function reconcileOnce(ctx, state) {
   let listed;
   try {
     listed = await cloreOf(ctx, state).myOrders();
   } catch {
-    return state;
+    return { ...state, rent: { ...state.rent, reconciledEmpty: false, reconcileError: true } };
   }
   const hits = matchNewOrder(listed.data?.orders, {
     serverId: state.rent.serverId,
     intentAtSec: state.rent.intentAtSec,
   });
   if (hits.length > 1) {
-    return transition(state, 'FAILED', {
-      failure: { reason: 'reconcile-ambiguous' },
-      rent: { ...state.rent, reconciledEmpty: false },
-    }, ctx.now(), '对账窗口里有多笔订单');
+    return needsHuman({ ...state, rent: { ...state.rent, reconciledEmpty: false } }, 'reconcile-ambiguous', ctx.now());
   }
   if (hits.length === 1) {
     const id = orderIdOf(hits[0]);
-    if (id == null) {
-      return transition(state, 'FAILED', { failure: { reason: 'order-without-id' } }, ctx.now(), '订单没有 id');
-    }
+    if (id == null) return needsHuman(state, 'order-without-id', ctx.now());
     return transition(state, 'RENTED', {
       rent: { ...state.rent, orderId: id, ssh: parseSshEndpoint(hits[0]), reconciledEmpty: false },
     }, ctx.now(), `对账到订单 ${id}`);
   }
-  return { ...state, rent: { ...state.rent, reconciledEmpty: true } };
+  return { ...state, rent: { ...state.rent, reconciledEmpty: true, reconcileError: false } };
+}
+
+async function reconcileUntil(ctx, state, log) {
+  const budget = Number(ctx.cfg.reconcileBudgetMs) > 0 ? Number(ctx.cfg.reconcileBudgetMs) : 180_000;
+  const started = ctx.now();
+  let current = state;
+  for (;;) {
+    current = await reconcileOnce(ctx, current);
+    saveState(ctx.stateDir, current);
+    if (current.phase !== 'RENT_UNKNOWN') return current;
+    if (ctx.now() - started + CREATE_COOLDOWN_MS > budget) break;
+    const before = ctx.now();
+    await ctx.sleep(CREATE_COOLDOWN_MS);
+    if (ctx.now() === before) throw new Stop('对账时钟没有前进，停止以免空转');
+  }
+  log('对账窗口结束仍没有订单，停止并交给人，不再下单');
+  current = needsHuman(current, 'reconcile-not-found', ctx.now());
+  saveState(ctx.stateDir, current);
+  return current;
+}
+
+function adoptOrder(state, order, now) {
+  const id = orderIdOf(order);
+  const rent = { ...state.rent, orderId: id, ssh: parseSshEndpoint(order), adopted: true, serverId: order.si ?? state.rent?.serverId };
+  let current = state;
+  if (current.phase === 'SPONSORED') current = transition(current, 'RENT_INTENT', { rent }, now, '接管已有订单');
+  if (current.phase === 'RENT_INTENT') current = transition(current, 'RENT_UNKNOWN', { rent }, now, '接管前记账');
+  if (current.phase === 'RENT_UNKNOWN') return transition(current, 'RENTED', { rent }, now, `接管订单 ${id}`);
+  return current;
 }
 
 async function sendCreate(ctx, state, log) {
-  assertSeat(state, ctx.now());
+  assertLive(ctx.cfg, ctx.env);
   const cfg = ctx.cfg;
+  const graceHours = await readGrace(ctx, state);
+  const window = withinGrace(ctx, { ...state, sponsor: { ...state.sponsor, graceHours } }, graceHours);
+  if (!window.ok) {
+    log(`校准窗口不够：剩余 ${window.remain ?? '未知'}ms，开机加校准需要 ${window.need ?? '未知'}ms`);
+    const stopped = needsHuman(state, window.reason, ctx.now());
+    saveState(ctx.stateDir, stopped);
+    return { state: stopped };
+  }
+  if (state.rent?.createSubmitted === true) {
+    log('状态里已有一次下单标记，不再 create_order');
+    return { state: await reconcileUntil(ctx, state.phase === 'RENT_UNKNOWN' ? state : state, log) };
+  }
   const clore = cloreOf(ctx, state);
+  const listed = await clore.myOrders();
+  const existing = adoptableOrders(listed.data?.orders, { orderId: state.rent?.orderId, tag: state.rent?.tag });
+  if (existing.length > 1) {
+    const stopped = needsHuman(state, 'multiple-active-orders', ctx.now());
+    saveState(ctx.stateDir, stopped);
+    return { state: stopped };
+  }
+  if (existing.length === 1) {
+    log('账户里已有符合条件的活跃订单，直接接管，不下新单');
+    const adopted = adoptOrder(state, existing[0], ctx.now());
+    saveState(ctx.stateDir, adopted);
+    return { state: adopted };
+  }
   const market = await clore.marketplace();
-  const servers = filterServers(market.data?.servers, profileOf(cfg), cfg.clore.currency);
+  const servers = selectServers(market.data?.servers, {
+    profile: profileOf(cfg),
+    currency: cfg.clore.currency,
+    maxUsdPerHour: Number(cfg.maxUsdPerHour),
+    rankBy: cfg.rankBy,
+  });
   if (!servers.length) return { state, waitReason: 'no-server' };
   const server = servers[0];
   const tag = state.rent?.tag || `flop-${crypto.randomBytes(4).toString('hex')}`;
@@ -244,7 +325,7 @@ async function sendCreate(ctx, state, log) {
     image: cfg.clore.image,
     currency: cfg.clore.currency,
     tag,
-    rentalHours: cfg.clore.rentalHours,
+    rentalHours: Number(cfg.maxRentHours),
     autoRenew: cfg.clore.autoRenew === true,
     autoRenewMaxPrice: cfg.clore.autoRenewMaxPrice,
     publicKey,
@@ -260,76 +341,59 @@ async function sendCreate(ctx, state, log) {
     serverId: server.id,
     intentAtSec,
     lastCreateAt: ctx.now(),
-    createAttempts: (state.rent?.createAttempts || 0) + 1,
+    createSubmitted: true,
     unknownReason: 'inflight',
     reconciledEmpty: false,
   };
-  let current = { ...state, rent };
-  if (state.phase === 'SPONSORED') {
-    current = transition(state, 'RENT_INTENT', { rent }, ctx.now(), '准备下单');
-  }
+  let current = state;
+  if (current.phase === 'SPONSORED') current = transition(current, 'RENT_INTENT', { rent }, ctx.now(), '准备下单');
   if (current.phase === 'RENT_INTENT') {
-    current = transition(current, 'RENT_UNKNOWN', { rent }, ctx.now(), '下单进入未知，先记账再请求');
+    current = transition(current, 'RENT_UNKNOWN', { rent }, ctx.now(), '下单标记已落盘，只允许这一次请求');
+  } else {
+    current = { ...current, rent };
   }
   saveState(ctx.stateDir, current);
+  assertLive(ctx.cfg, ctx.env);
   let res;
   try {
     res = await clore.createOrder(body);
   } catch (e) {
-    current = { ...current, rent: { ...current.rent, unknownReason: 'timeout', lastCreateAt: ctx.now() } };
+    current = { ...current, rent: { ...current.rent, unknownReason: 'timeout', lastCreateAt: ctx.now(), createSubmitted: true } };
     saveState(ctx.stateDir, current);
     log(redact(e.message || 'create_order 超时'));
-    const checked = await reconcile(ctx, current);
-    saveState(ctx.stateDir, checked);
-    return { state: checked };
+    return { state: await reconcileUntil(ctx, current, log) };
   }
   const classified = classifyCreate(res);
   if (classified.kind === 'rejected') {
     current = transition(current, 'FAILED', {
       failure: { reason: 'create-rejected', detail: classified.error },
-      rent: { ...current.rent, lastCreateAt: ctx.now() },
+      rent: { ...current.rent, lastCreateAt: ctx.now(), createSubmitted: true },
     }, ctx.now(), classified.error);
     saveState(ctx.stateDir, current);
     return { state: current };
   }
   current = {
     ...current,
-    rent: { ...current.rent, unknownReason: classified.kind === 'accepted' ? 'code0' : 'bad-body', lastCreateAt: ctx.now() },
+    rent: { ...current.rent, unknownReason: classified.kind === 'accepted' ? 'code0' : 'bad-body', lastCreateAt: ctx.now(), createSubmitted: true },
   };
-  const checked = await reconcile(ctx, current);
-  saveState(ctx.stateDir, checked);
-  return { state: checked };
+  saveState(ctx.stateDir, current);
+  return { state: await reconcileUntil(ctx, current, log) };
 }
 
 async function resumeUnknown(ctx, state, log) {
-  const already = state.rent?.reconciledEmpty === true;
-  let current = await reconcile(ctx, state);
-  saveState(ctx.stateDir, current);
-  if (current.phase !== 'RENT_UNKNOWN') return { state: current };
-  if (!already) {
-    log('本轮对账完成前不重下订单');
-    return { state: current };
-  }
-  const reason = current.rent?.unknownReason;
-  const retryable = reason === 'timeout' || reason === 'inflight' || reason === 'bad-body';
-  if (reason === 'code0' || current.rent?.retried || !retryable) {
-    log('对账仍没有订单。code 0 或已经重试过的未知下单不会再 create_order');
-    return { state: current };
-  }
-  const seat = await refreshSeat(ctx, current);
-  current = seat.state;
-  if (seat.seat.action !== 'pass') return { state: current, waitUntil: seat.seat.until || null, waitReason: seat.seat.reason };
-  current = { ...current, rent: { ...current.rent, retried: true } };
-  saveState(ctx.stateDir, current);
-  return sendCreate(ctx, current, log);
+  assertLive(ctx.cfg, ctx.env);
+  log('RENT_UNKNOWN 只对账，不提交新的 create_order');
+  return { state: await reconcileUntil(ctx, state, log) };
 }
 
 async function bootstrap(ctx, state, log) {
+  assertLive(ctx.cfg, ctx.env);
   let current = state.phase === 'RENTED'
     ? transition(state, 'BOOTSTRAP', {}, ctx.now(), '开始核验硬件')
     : state;
   saveState(ctx.stateDir, current);
   if (!current.rent?.hardwareChecked) {
+    assertLive(ctx.cfg, ctx.env);
     const ssh = typeof ctx.ssh === 'function' ? ctx.ssh(current.rent.ssh) : ctx.ssh;
     if (typeof ssh?.exec !== 'function') throw new Stop('没有 SSH 执行器，无法核验显存');
     const smi = await ssh.exec('nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits');
@@ -341,6 +405,7 @@ async function bootstrap(ctx, state, log) {
         rent: { ...current.rent, hardwareChecked: true, hardwareOk: false },
       }, ctx.now(), hw.reason);
       if (ctx.cfg.autoCancelOnFail === true) {
+        assertLive(ctx.cfg, ctx.env);
         const cancel = await confirmCancel(cloreOf(ctx, current), current.rent.orderId);
         current = { ...current, rent: { ...current.rent, cancel } };
         log(cancel.done ? '不达标，已确认订单离开活动列表' : '取消请求未确认完成，订单可能仍在计费');
@@ -355,6 +420,7 @@ async function bootstrap(ctx, state, log) {
   }
   if (current.phase === 'FAILED') return current;
   if (!current.bootstrap?.started) {
+    assertLive(ctx.cfg, ctx.env);
     const backend = backendFrom(ctx.cfg);
     const result = await backend.start({
       orderId: current.rent.orderId,
@@ -383,12 +449,20 @@ export async function runOnce(ctx) {
   const mode = executionMode(ctx.cfg, ctx.env || {});
   const logs = [];
   const log = (line) => logs.push(redact(line));
+  let state = loadState(ctx.stateDir);
+
+  if (mode === 'dry' && state.phase !== 'SEAT_CHECK') {
+    log(`DRY 只输出已保存的状态 ${state.phase}，不对账、不下单、不连接机器`);
+    return finish(mode, state, logs, null, { dry: true, readOnly: true });
+  }
   if (ctx.cfg.sponsorMode === 'review' && !ctx.cfg.review?.submitUrl) {
     throw new Stop('review 模式的提交地址没有配置。官方测试网申请入口尚未公布，脚本不会猜测 URL。');
   }
-  let state = loadState(ctx.stateDir);
+  if (mode === 'live') assertLiveReady(ctx.cfg);
 
-  if (state.phase === 'FAILED') return finish(mode, state, logs, null, { stopped: true, reason: state.failure?.reason });
+  if (state.phase === 'FAILED' || state.phase === 'STOP_NEEDS_HUMAN') {
+    return finish(mode, state, logs, null, { stopped: true, reason: state.failure?.reason });
+  }
   if (state.phase === 'READY') {
     return finish(mode, state, logs, maybeIdlePearl({ minerReady: true, flopSessionActive: null }));
   }
@@ -405,6 +479,15 @@ export async function runOnce(ctx) {
     const pearl = state.phase === 'CALIBRATE' || state.phase === 'READY'
       ? maybeIdlePearl({ minerReady: state.phase === 'READY', flopSessionActive: null }) : null;
     return finish(mode, state, logs, pearl);
+  }
+
+  if (state.sponsor?.done && (state.phase === 'SPONSORED' || state.phase === 'RENT_INTENT')) {
+    const rented = await sendCreate(ctx, state, log);
+    state = rented.state;
+    if (state.phase === 'RENTED' || state.phase === 'BOOTSTRAP') state = await bootstrap(ctx, state, log);
+    const pearl = state.phase === 'CALIBRATE' || state.phase === 'READY'
+      ? maybeIdlePearl({ minerReady: state.phase === 'READY', flopSessionActive: null }) : null;
+    return finish(mode, state, logs, pearl, { waitReason: rented.waitReason || null });
   }
 
   const refreshed = await refreshSeat(ctx, state);
@@ -438,7 +521,6 @@ export async function runOnce(ctx) {
     return finish(mode, state, logs, null, { waitingApproval: true, seat: refreshed.seat, preview });
   }
   if (state.phase === 'SPONSORED' || state.phase === 'RENT_INTENT') {
-    assertSeat(state, ctx.now());
     const rented = await sendCreate(ctx, state, log);
     state = rented.state;
     if (rented.waitReason) return finish(mode, state, logs, null, { waitReason: rented.waitReason, preview });
